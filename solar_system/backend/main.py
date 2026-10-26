@@ -24,8 +24,8 @@ from fastapi.staticfiles import StaticFiles
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(BASE, "solar.db")
-TS_CHANNEL = 3551353
-TS_READ_KEY = "6TD0ANB8JNI4GOXA"
+TS_CHANNEL = os.getenv("TS_CHANNEL", "")
+TS_READ_KEY = os.getenv("TS_READ_KEY", "")
 STRING_ID = os.getenv("STRING_ID", "string1")
 POLL_SEC = int(os.getenv("POLL_SEC", "60"))
 DEMO = os.getenv("DEMO", "0") == "1"                       # simulated history + fake live data
