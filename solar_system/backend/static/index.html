@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solar Panel Health Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --text:#1c2733; --muted:#6b7785; --line:#e2e7ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12171d; --card:#1b232c; --text:#e8edf2; --muted:#93a0ad; --line:#2b3641; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 24px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+  h1 { font-size:20px; margin:0; }
+  main { padding:0 24px 32px; max-width:1200px; margin:auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  .pill { padding:4px 12px; border-radius:999px; color:#fff; font-weight:600; font-size:14px; background:#6b7280; }
+  .banner { border-radius:12px; padding:14px 16px; margin-bottom:16px; color:#fff; font-weight:500; background:#1a9850; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .kpi small { color:var(--muted); display:block; } .kpi b { font-size:22px; }
+  .two { display:grid; grid-template-columns:2fr 1fr; gap:16px; } @media (max-width:800px){ .two{grid-template-columns:1fr;} }
+  h2 { font-size:16px; margin:0 0 10px; }
+  .tabs button { border:1px solid var(--line); background:var(--card); color:var(--text); padding:6px 14px; border-radius:8px; cursor:pointer; margin-right:6px; }
+  .tabs button.on { background:#2563eb; color:#fff; border-color:#2563eb; }
+  table { width:100%; border-collapse:collapse; font-size:14px; } td,th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  .muted { color:var(--muted); font-size:13px; } .wrap { overflow-x:auto; } canvas { max-height:300px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>☀️ Solar Panel Health Monitor</h1>
+  <div><span class="muted" id="meta"></span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
+</header>
+<main>
+  <div class="banner" id="banner">Waiting for data…</div>
+
+  <div class="grid">
+    <div class="kpi"><small>Voltage</small><b id="v">–</b></div>
+    <div class="kpi"><small>Current</small><b id="i">–</b></div>
+    <div class="kpi"><small>Power</small><b id="p">–</b></div>
+    <div class="kpi"><small>Light</small><b id="lux">–</b></div>
+    <div class="kpi"><small>Temperature</small><b id="t">–</b></div>
+    <div class="kpi"><small>Performance ratio</small><b id="pr">–</b></div>
+    <div class="kpi"><small>Energy today</small><b id="wh">–</b></div>
+  </div>
+
+  <div class="two">
+    <div class="card"><h2>Live power and light</h2><canvas id="liveChart"></canvas></div>
+    <div class="card">
+      <h2>Panel health and aging</h2>
+      <div style="font-size:34px;font-weight:700" id="hp">–</div>
+      <div class="muted" id="hdesc">Performance vs. the first week of data</div>
+      <p id="aging" style="margin-top:12px">–</p>
+      <div class="muted" id="simnote"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="tabs" style="margin-bottom:10px">
+      <button data-p="daily" class="on">Daily</button><button data-p="weekly">Weekly</button><button data-p="monthly">Monthly</button>
+    </div>
+    <canvas id="histChart"></canvas>
+    <div class="muted" id="histnote" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Fault alerts</h2>
+    <div class="wrap"><table><thead><tr><th>Fault</th><th>Started</th><th>Last seen</th><th>Suggested action</th></tr></thead><tbody id="alerts"></tbody></table></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const COLORS = { normal:'#1a9850', low_light:'#6b7280', partial_shading:'#e08a00', dirty:'#b8860b', open_circuit:'#d73027', short_circuit:'#d73027' };
+const nice = s => s.replaceAll('_', ' ');
+const get = async u => (await fetch(u)).json();
+let liveChart, histChart, period = 'daily', sound = false, lastLabel = null;
+function beep() { try { const c = new (window.AudioContext || window.webkitAudioContext)(); const o = c.createOscillator();
+  o.frequency.value = 880; o.connect(c.destination); o.start(); setTimeout(() => { o.stop(); c.close(); }, 500); } catch (e) {} }
+$('snd').onclick = () => { sound = !sound; $('snd').textContent = sound ? '🔔 Sound alerts on' : '🔕 Sound alerts off'; if (sound) beep(); };
+
+async function refreshLive() {
+  const L = await get('/api/latest');
+  if (!L.reading) { $('status').textContent = 'No data yet'; return; }
+  const r = L.reading, c = COLORS[r.label] || '#6b7280';
+  $('v').textContent = r.voltage_v.toFixed(2) + ' V';
+  $('i').textContent = r.current_ma.toFixed(1) + ' mA';
+  $('p').textContent = r.power_mw.toFixed(1) + ' mW';
+  $('lux').textContent = Math.round(r.lux) + ' lx';
+  $('t').textContent = r.temp_c.toFixed(1) + ' °C';
+  $('pr').textContent = r.pr != null ? Math.round(r.pr * 100) + ' %' : '–';
+  $('wh').textContent = L.today_wh.toFixed(2) + ' Wh';
+  $('status').textContent = nice(r.label); $('status').style.background = c;
+  $('banner').style.background = c;
+  $('banner').textContent = (L.fault ? '⚠️ ' : '') + L.advice;
+  document.title = (L.fault ? '⚠ ' + nice(r.label) + ' - ' : '') + 'Solar Panel Health Monitor';
+  if (L.fault && lastLabel !== r.label && sound) beep();
+  lastLabel = r.label;
+  $('meta').textContent = 'Detector: ' + L.model + ' · last reading ' + r.ts;
+
+  const rows = await get('/api/readings?limit=120');
+  const data = { labels: rows.map(x => x.ts.slice(11, 19)),
+    datasets: [
+      { label: 'Power (mW)', data: rows.map(x => x.power_mw), borderColor: '#2563eb', tension: .3, pointRadius: 0, yAxisID: 'y' },
+      { label: 'Light (lux)', data: rows.map(x => x.lux), borderColor: '#e0a800', tension: .3, pointRadius: 0, yAxisID: 'y1' }] };
+  if (!liveChart) liveChart = new Chart($('liveChart'), { type: 'line', data,
+    options: { animation: false, scales: { y: { title: { display: true, text: 'mW' } },
+      y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'lux' } } } } });
+  else { liveChart.data = data; liveChart.update(); }
+}
+
+async function refreshHealth() {
+  const H = await get('/api/health');
+  if (H.health_pct == null) { $('hp').textContent = '–'; $('aging').textContent = 'Needs at least 8 days of data.'; return; }
+  $('hp').textContent = H.health_pct + ' %';
+  const a = H.aging_pct_per_month;
+  $('aging').textContent = 'Trend: ' + (a > 0 ? '+' : '') + a + ' % per month (performance ratio)';
+  $('simnote').textContent = H.sim ? 'Includes SIMULATED demo history (accelerated aging).' : '';
+}
+
+async function refreshHist() {
+  const d = await get('/api/' + period);
+  const data = { labels: d.map(x => x.label), datasets: [
+    { type: 'bar', label: 'Energy (Wh)', data: d.map(x => x.wh), backgroundColor: '#60a5fa', yAxisID: 'y' },
+    { type: 'line', label: 'Performance ratio (%)', data: d.map(x => x.pr != null ? +(x.pr * 100).toFixed(1) : null),
+      borderColor: '#d73027', tension: .3, yAxisID: 'y1', spanGaps: true }] };
+  if (histChart) histChart.destroy();
+  histChart = new Chart($('histChart'), { data, options: { scales: { y: { title: { display: true, text: 'Wh' } },
+    y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'performance ratio %' } } } } });
+  let note = d.some(x => x.sim) ? 'Includes SIMULATED demo history. ' : '';
+  if (period === 'monthly') note += d.filter(x => x.change_pct != null).map(x => x.label + ': ' + (x.change_pct > 0 ? '+' : '') + x.change_pct + '%').join(' · ');
+  if (period === 'weekly' && d.length) { const w = d[d.length - 1]; note += 'Latest week best day ' + w.best_day + ', worst day ' + w.worst_day + ', ' + w.faults + ' fault(s).'; }
+  $('histnote').textContent = note;
+}
+
+async function refreshAlerts() {
+  const a = await get('/api/alerts');
+  $('alerts').innerHTML = a.length ? a.map(x => `<tr><td><b style="color:${COLORS[x.label]}">${nice(x.label)}</b></td><td>${x.start}</td><td>${x.end}</td><td>${x.advice}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">No faults recorded.</td></tr>';
+}
+
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); period = b.dataset.p; refreshHist();
+});
+
+refreshLive(); refreshHealth(); refreshHist(); refreshAlerts();
+setInterval(refreshLive, 5000);
+setInterval(() => { refreshHealth(); refreshAlerts(); }, 30000);
+setInterval(refreshHist, 60000);
+</script>
+</body>
+</html>
