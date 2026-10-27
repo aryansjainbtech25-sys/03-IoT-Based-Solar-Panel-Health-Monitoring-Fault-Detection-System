@@ -49,7 +49,9 @@ bool inaOK = false, luxOK = false;
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(500);
+  Serial.println();
+  Serial.flush();
   Wire.begin(SDA_PIN, SCL_PIN);
   analogReadResolution(12);
 
@@ -65,11 +67,15 @@ void setup() {
   if (ds.getDeviceCount() == 0) {
     Serial.println("# ERROR: DS18B20 not found");
   }
-  Serial.println("# FIRMWARE_VERSION=1");
+  Serial.println("# FIRMWARE_VERSION=1");  // <- Check this line exists
   Serial.println("lux,ldr,temp_c,voltage_v,current_ma,power_mw");
 }
-
 void loop() {
+  static unsigned long lastVer = 0;
+  if (millis() - lastVer > 30000) {
+    Serial.println("# FIRMWARE_VERSION=1");
+    lastVer = millis();
+  }
   float lux = luxOK ? lightMeter.readLightLevel() : NAN;
 
   long ldrSum = 0;
@@ -80,20 +86,23 @@ void loop() {
   float t = ds.getTempCByIndex(0);
   if (t == DEVICE_DISCONNECTED_C) t = NAN;
 
-  float vSum = 0, iSum = 0;
+  float v, i, p;
   if (inaOK) {
+    float vSum = 0, iSum = 0;
     for (int k = 0; k < 10; k++) {
       vSum += ina219.getBusVoltage_V() + ina219.getShuntVoltage_mV() / 1000.0f;
       iSum += ina219.getCurrent_mA();
       delay(5);
     }
+    v = vSum / 10.0f;
+    i = iSum / 10.0f;
+    if (i < 0.0f && i > -0.5f) i = 0.0f;
+    p = v * i;
+  } else {
+    v = NAN; i = NAN; p = NAN;
   }
-  float v = vSum / 10.0f;
-  float i = iSum / 10.0f;
-  if (i < 0.0f && i > -0.5f) i = 0.0f;
-  float p = v * i;
 
-  if (v > 8.5f) Serial.println("# WARNING: voltage above 8.5 V - disconnect and check panel!");
+  if (!isnan(v) && v > 8.5f) Serial.println("# WARNING: voltage above 8.5 V - disconnect and check panel!");
   // Must match CSV header in setup() - 6 fields - increment FIRMWARE_VERSION if changed
   Serial.printf("%.1f,%d,%.2f,%.3f,%.2f,%.2f\n", lux, ldr, t, v, i, p);
   delay(1800);
