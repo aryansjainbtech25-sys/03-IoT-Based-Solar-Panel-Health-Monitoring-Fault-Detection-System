@@ -1,5 +1,12 @@
 # IoT-Based Solar Panel Health Monitoring and Fault Detection System
 
+| Student Name | USN |
+|---|---|
+| Aryan S Jain | 1RUA25CSE0087 |
+| Ashifraj Gaddi | 1RUA25CSE0088 |
+| Ashwin Chandrashekar Naik | 1RUA25CSE0090 |
+| Bindan M | 1RUA25CSE0112 |
+
 A prototype that measures a small solar panel's electrical output and its environment with an ESP32, logs the data on a laptop, trains a machine-learning model to recognise panel conditions and faults, and shows everything on a live web dashboard with alerts and long-term performance analysis.
 
 This version sends data **over USB serial** (no Wi-Fi). All analysis runs on the laptop.
@@ -50,7 +57,7 @@ This version sends data **over USB serial** (no Wi-Fi). All analysis runs on the
 | DS18B20 | Temperature sensor with a 4.7 kΩ pull-up |
 | 3 to 6 V gear motor | Used as the panel's load |
 | Breadboard, jumper wires, 4.7 kΩ resistor | |
-| Laptop with Arduino IDE and Python | Windows |
+| Laptop with Arduino IDE and Python | Windows / Linux (Linux uses /dev/ttyUSB0) |
 
 **Do not use the 33 Ω resistor as a load.** At the panel's current it can exceed its 0.25 W rating in sun. Keep it out of the circuit.
 
@@ -94,29 +101,25 @@ Why each connection matters:
 
 ## 4. Project structure
 
-Put the project outside OneDrive (for example `C:\solar_project`), because OneDrive can lock the database file.
+Put the project outside OneDrive (for example `C:\solar_project`), because OneDrive can lock the database file. On Linux, use `~/Documents/...`.
 
 ```
-solar_project\
-  README.md
+solar_project  README.md
   RUNBOOK.md                 shorter checklist (this README supersedes it)
   setup.bat  collect.bat  train.bat  run_dashboard.bat  run_demo_fake.bat   optional shortcuts
-  esp32\
-    solar_serial\
-      solar_serial.ino       ESP32 firmware (the folder name must match the file name)
-  tools\
-    logger.py                saves labelled sensor rows to CSV
-  backend\
-    main.py                  API, serial reader, fault detection, analytics, SQLite
+  .gitignore                 ignores rejected_solar_data.csv debug artifacts
+  esp32    solar_serial      solar_serial.ino       ESP32 firmware (folder name must match file name)
+  tools    logger.py                saves labelled sensor rows to CSV (Phase 2: with rejected logging, version check)
+  backend    main.py                  API, serial reader, fault detection, analytics, SQLite
     train.py                 calibration + model training
     requirements.txt         Python packages
-    static\
-      index.html             dashboard
-    solar_data.csv           created by logger.py
+    static      index.html             dashboard
+    solar_data.csv           created by logger.py (deliverable)
     solar.db                 created by main.py
     model.joblib             created by train.py
     calib.json               created by train.py
     confusion_matrix.png     created by train.py
+  rejected_solar_data.csv    created by logger.py (debug artifact, gitignored)
 ```
 
 ---
@@ -126,22 +129,25 @@ solar_project\
 ### 5.1 Arduino IDE (firmware)
 1. Install the board package **esp32 by Espressif**, and these libraries: **Adafruit INA219**, **BH1750** (by Christopher Laws), **OneWire**, **DallasTemperature**.
 2. Open `esp32\solar_serial\solar_serial.ino`.
-3. Tools → Board → **ESP32 Dev Module**, choose your port (for example COM3).
+3. Tools → Board → **ESP32 Dev Module**, choose your port (for example COM3 on Windows, /dev/ttyUSB0 on Linux).
 4. Upload.
 5. Open Serial Monitor at **115200 baud**. You should see:
    ```
+   # FIRMWARE_VERSION=1
    lux,ldr,temp_c,voltage_v,current_ma,power_mw
    285.8,1865,33.38,0.040,1.12,0.04
    ...
    ```
-   Lines starting with `#` are status or error messages (for example `# ERROR: INA219 not found`).
-6. **Close Serial Monitor.**
+   Lines starting with `#` are status or error messages (for example `# ERROR: INA219 not found`, `# WARNING: voltage above 8.5 V`).
+   Firmware prints `# FIRMWARE_VERSION=1` at boot and every ~30s for logger version checking.
+6. **Close Serial Monitor.** (Logger and dashboard cannot use port while monitor is open)
 
 ### 5.2 Python
-1. Install Python 3 from python.org and tick **Add Python to PATH**. Check with `python --version`.
+1. Install Python 3 from python.org and tick **Add Python to PATH**. Check with `python --version` or `python3 --version` on Linux.
 2. Open a terminal in the project folder and install packages:
    ```
    python -m pip install -r backend\requirements.txt
+   pip install pyserial
    ```
    (`setup.bat` runs the same command.)
 
@@ -149,18 +155,36 @@ solar_project\
 
 ## 6. Running each stage
 
-Commands below are for **PowerShell** (the VS Code terminal). Open the terminal in the project root, for example `C:\solar_project`. If your port is not COM3, replace it everywhere.
+Commands below are for **PowerShell** (VS Code terminal) on Windows and **bash** on Linux. Open the terminal in the project root. If your port is not COM3, replace it everywhere (Linux: /dev/ttyUSB0).
 
-### Stage A: Collect labelled data (`tools\logger.py`)
+### Stage A: Collect labelled data (`tools\logger.py`) - Phase 2 Updated
 
 ```
+# Windows:
 python tools\logger.py --port COM3 --label normal --rows 100
+
+# Linux:
+python3 tools/logger.py --port /dev/ttyUSB0 --label normal --rows 100
 ```
 
+**Phase 2 improvements (Tasks 1-10):**
+
+- **Rejected row logging:** Creates `rejected_solar_data.csv` (same folder as `--file`) with header `timestamp,raw_line,reason,label`. Reasons:
+  - `bad_field_count_{n}`: boot spam like `00`, `mw`, `try 0x4008059c`, or concatenated lines (e.g. 49,84 fields)
+  - `parse_error`: float() failed
+  - `nan_in:temp_c` or `nan_in:lux,temp_c`: NaN fields listed by name (e.g. DS18B20 disconnected)
+  - Purpose: If you get 0 or 63/100 rows, open rejected file to see why. Clean CSV stays clean.
+- **Firmware version soft-check:** Firmware sends `# FIRMWARE_VERSION=1` at boot + every 30s. Logger prints `Detected # FIRMWARE_VERSION=1` and final `Firmware: 1`. If no version seen before first data row, warns `No # FIRMWARE_VERSION line seen...` to catch schema changes.
+- **ERROR/WARNING print:** `# ERROR: DS18B20 not found` and `# WARNING: voltage above 8.5 V...` are printed to console immediately (previously silent).
+- **Graceful port handling:** If port busy or non-existent (/dev/ttyUSB99), prints friendly message `Could not open port X — is another program using it?` + tip `sudo fuser -k X`, no Python traceback. Also handles read failure when another program grabs port mid-run.
+- **Guaranteed close:** `try/finally` ensures `Port X closed.` always runs (normal, Ctrl+C, USB unplug). Next run won't be busy.
+- **Docstring + .gitignore:** Docstring documents all above + COM3 vs /dev/ttyUSB0 note. `.gitignore` ignores `rejected_solar_data.csv` / `rejected_*.csv` (debug artifact), but NOT `solar_data.csv` (deliverable).
+
+**Label collection:**
 - One run = one condition. Change `--label` for each condition.
 - Labels: `normal`, `low_light`, `partial_shading`, `dirty`, `open_circuit`.
 - 100 rows takes about 3.5 minutes. `--rows 200` is better.
-- Rows are appended to `backend\solar_data.csv` with a timestamp and your label. Ctrl+C stops early and keeps what was saved.
+- Rows are appended to `solar_data.csv` (or `backend/solar_data.csv` if you use --file) with a timestamp and your label. Ctrl+C stops early and keeps what was saved. Now prints `Interrupted by user` + `Port closed.` cleanly.
 - The order of runs does not matter to the code. Set up the condition first, keep it steady during the run, and leave a gap of at least 10 to 20 seconds between runs.
 
 How to create each condition:
@@ -177,7 +201,7 @@ A good order, since the first four share the same sunlight:
 1. `normal`  2. `partial_shading`  3. `dirty`  4. `open_circuit`  5. `low_light`
 6. `normal` again later or at another angle  7. `low_light` again at another time
 
-Do `normal` and `low_light` **twice** so the model can be tested on a session it did not train on. Start with a fresh `solar_data.csv` (delete or rename any old test file) and remove any wrongly labelled rows by timestamp before training.
+Do `normal` and `low_light` **twice** so the model can be tested on a session it did not train on. Start with a fresh `solar_data.csv` (delete or rename any old test file) and remove any wrongly labelled rows by timestamp before training. Check `rejected_solar_data.csv` if row counts don't match.
 
 ### Stage B: Train the model (`backend\train.py`)
 
@@ -199,7 +223,8 @@ Outputs in `backend\`: `model.joblib`, `calib.json`, `confusion_matrix.png`. Use
 
 ```
 cd backend
-$env:SERIAL_PORT="COM3"
+$env:SERIAL_PORT="COM3"   # Windows PowerShell
+# export SERIAL_PORT=/dev/ttyUSB0  # Linux bash
 $env:DEMO_HISTORY="1"
 python -m uvicorn main:app --port 8000
 ```
@@ -293,6 +318,10 @@ SQLite file `backend\solar.db`, table `readings`:
 
 Simulated history is seeded once when `DEMO` or `DEMO_HISTORY` is set and no simulated rows exist. Delete `solar.db` to start clean (stop the backend first).
 
+CSV files:
+- `solar_data.csv`: Clean labelled data (8 columns: timestamp,lux,ldr,temp_c,voltage_v,current_ma,power_mw,label) - deliverable
+- `rejected_solar_data.csv`: Debug artifact (timestamp,raw_line,reason,label) - gitignored, contains boot spam `00`, `mw`, `try 0x40...`, concatenated lines, `nan_in:temp_c`, `parse_error`, `bad_field_count_{n}`
+
 API endpoints (interactive docs at http://127.0.0.1:8000/docs):
 
 | Endpoint | Returns |
@@ -313,18 +342,23 @@ Configuration (environment variables): `SERIAL_PORT`, `DEMO`, `DEMO_HISTORY`, `S
 
 | Symptom | Fix |
 |---|---|
-| `could not open port COM3` / access denied | Another program has the port. Close Serial Monitor, the logger and the dashboard. Check the COM number in Arduino IDE |
-| Dashboard empty | Terminal should say `Serial connected`. Press the ESP32 EN button; check the sketch prints CSV lines |
-| `# ERROR: INA219 not found` or BH1750 not found | Check SDA/SCL (21/22), power on 3V3 and ground |
-| Voltage near 0 and tiny current | Panel in the dark, loop not complete, or panel − not on the common GND |
-| Voltage or current looks wrong | Check VIN+ → VIN- is through the module, not jumpered; the 33 Ω resistor is out |
-| ESP32 resets / `Brownout detector was triggered` | Use a short, good USB cable in a direct laptop port |
-| `python is not recognized` | Reinstall Python with "Add to PATH", or try `py` instead of `python` |
-| `database is locked` | Move the project out of OneDrive; run only one backend |
-| Labels look wrong on real data before training | Expected: the rule thresholds are placeholders. Collect data and run `train.py` |
-| Labels still look wrong after training | Check for mislabelled rows, a changed load, or a BH1750 not beside the panel. Re-collect that class |
-| Fake readings mixed with real | `DEMO` is still set in the terminal. Use a new terminal |
-| `.bat` double-click window closes at once | `collect.bat` needs a label; run it from a terminal |
+| `could not open port COM3` / access denied / `Could not open port /dev/ttyUSB0 — is another program using it?` | Another program has the port. Close Serial Monitor, the logger and the dashboard. Check COM number in Arduino IDE. Run `sudo fuser -k /dev/ttyUSB0` on Linux. Logger now prints friendly message with tip, no traceback. |
+| `Serial read failed — port was grabbed or device unplugged?` | USB unplugged mid-run or another program grabbed port. Logger prints `Port X closed.` and exits cleanly. Re-plug and re-run. |
+| Dashboard empty | Terminal should say `Serial connected`. Press the ESP32 EN button; check sketch prints CSV lines with `# FIRMWARE_VERSION=1` |
+| `# ERROR: INA219 not found` or BH1750 not found | Check SDA/SCL (21/22), power on 3V3 and ground. Logger now prints these ERROR lines to console immediately (Phase 2). |
+| `# ERROR: DS18B20 not found` + `rejected (nan_in:temp_c)` + 0 rows saved | DS18B20 disconnected or missing 4.7kΩ pull-up. Check GPIO4 wiring. Rows go to `rejected_solar_data.csv` with reason `nan_in:temp_c`. |
+| `rejected (bad_field_count_1): 00` or `mw` or `try 0x4008059c` | Normal ESP32 boot spam at 115200. Filtered by logger to `rejected_solar_data.csv`, clean CSV unaffected. |
+| `WARNING: No # FIRMWARE_VERSION line seen...` + `Firmware: UNKNOWN` | Logger started >1 sec after ESP boot and missed one-time version line. Press EN then run logger within 1 sec, or wait up to 30s for periodic re-print (firmware prints version every 30s). |
+| Voltage near 0 and tiny current | Panel in the dark, loop not complete, or panel − not on common GND |
+| Voltage or current looks wrong | Check VIN+ → VIN- is through module, not jumpered; 33 Ω resistor is out |
+| ESP32 resets / `Brownout detector was triggered` | Use short, good USB cable in direct laptop port. Avoid C-to-C cable, use USB-A to C. |
+| `python is not recognized` | Reinstall Python with "Add to PATH", or try `py` instead of `python`, `python3` on Linux |
+| `database is locked` | Move project out of OneDrive; run only one backend |
+| Labels look wrong on real data before training | Expected: rule thresholds are placeholders. Collect data and run `train.py` |
+| Labels still look wrong after training | Check for mislabelled rows, changed load, or BH1750 not beside panel. Check `rejected_solar_data.csv` for hidden faults. Re-collect class |
+| Fake readings mixed with real | `DEMO` still set in terminal. Use new terminal |
+| `.bat` double-click window closes at once | `collect.bat` needs label; run from terminal |
+| `Interrupted by user (Ctrl+C)` + `Port X closed.` | Normal Phase 2 behavior - Ctrl+C now prints message + guaranteed close |
 
 ---
 
@@ -337,6 +371,7 @@ Configuration (environment variables): `SERIAL_PORT`, `DEMO`, `DEMO_HISTORY`, `S
 - Real aging is too slow to observe in this project.
 - The "string" concept (many panels on one ESP32) is a design extension, not implemented. In a series string one current sensor can detect a fault but cannot say which panel caused it; per-panel voltage sensing or several strings would be needed.
 - No Wi-Fi, cloud or remote access in this version.
+- Logger's `rejected_solar_data.csv` is a debug artifact that grows on every run - gitignored, not a deliverable.
 
 ## 12. Possible future work
 - Wi-Fi upload (HTTP or MQTT) to a cloud backend or ThingSpeak
@@ -344,3 +379,34 @@ Configuration (environment variables): `SERIAL_PORT`, `DEMO`, `DEMO_HISTORY`, `S
 - Email or phone notifications for faults
 - Long-term outdoor logging to measure real degradation
 - Running a small model on the ESP32 itself
+- Improve rejected-file analysis: auto-classify boot spam vs sensor faults vs schema mismatch
+- Add --stats flag to logger.py to summarize rejected reasons
+
+## 13. Phase 2 Implementation Notes (Tasks 1-10)
+
+**Firmware changes (solar_serial.ino):**
+- Added CSV Contract + Known Limitations comment blocks
+- Added `Serial.println("# FIRMWARE_VERSION=1");` in setup() before header + every 30s in loop() for robust version detection
+- Added DS18B20 check with `getDeviceCount() == 0` -> `# ERROR: DS18B20 not found`
+- Fixed INA219 fault to output NAN not 0 for proper fault detection
+- Comment above printf: Must match CSV header - increment FIRMWARE_VERSION if changed
+
+**Logger changes (tools/logger.py Tasks 1-10):**
+- Task 1: `REJECTED_HEADER = ["timestamp","raw_line","reason","label"]`
+- Task 2: `rejected_file_path = os.path.join(os.path.dirname(args.file), f"rejected_{basename}")`
+- Task 3: Dual `with open() as f, open() as rf:` + header write if new
+- Task 4: `nan_in:temp_c` reason using `zip(HEADER[1:-1], vals)` safe pairing, plus `bad_field_count_{n}`, `parse_error`, `schema_mismatch`
+- Task 5: Print `# ERROR` / `# WARNING` lines to console
+- Task 6: `saw_firmware_version` flag, `Detected # FIRMWARE_VERSION=1`, warning if missing, final `Firmware: 1/UNKNOWN`
+- Task 7: `try/except SerialException` on open + read with friendly message + tip `sudo fuser -k`
+- Task 8: `try/finally ser.close()` + `Port X closed.` guaranteed
+- Task 9: `.gitignore` with `rejected_solar_data.csv` + `rejected_*.csv` (NOT solar_data.csv)
+- Task 10: Docstring with B.2-B.8, CSV contract, COM3 vs /dev/ttyUSB0, .gitignore note
+
+**Verification:**
+- Boot spam `00`, `mw`, `try 0x4008059c` -> rejected with `bad_field_count_1`, clean CSV gets 100/100
+- DS18B20 disconnected -> `# ERROR` printed + `rejected (nan_in:temp_c)` + 0 rows to clean CSV
+- Version present: `Detected` + `Firmware: 1`, no warning
+- Version missing (started late): warning + `UNKNOWN`, then catches 30s re-print
+- Port busy: friendly message, no traceback
+- Unplug mid-run: `Serial read failed...` + `Port closed.` + immediate re-run works
