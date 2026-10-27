@@ -25,7 +25,7 @@ B.4 - Print # ERROR and # WARNING:
 B.5 - Graceful port open/read failures:
     - Wraps serial.Serial() open and readline() in try/except SerialException.
     - On failure (port busy, non-existent /dev/ttyUSB99, multiple access), prints friendly message:
-    "Could not open port X — is another program using it? (【entity-Arduino¦canonical_name=Arduino】 Serial Monitor / another logger / miniterm)"
+    "Could not open port X — is another program using it? (Arduino Serial Monitor / another logger / miniterm)"
         + details + tip "sudo fuser -k X" and exits cleanly (no traceback).
 
 B.6 - Guaranteed ser.close():
@@ -149,13 +149,20 @@ try:
                     print(f"rejected ({reason}): {line}")
                     continue
 
-                # --- Task 4 spec: reason with column names ---
+                # --- Issue 1 fix: zip-safe field-name lookup ---
                 nan_cols = []
-                for idx, v in enumerate(vals):
+                # zip stops at shorter, can't crash on schema mismatch
+                for col_name, v in zip(HEADER[1:-1], vals):
                     if math.isnan(v):
-                        # HEADER[1]=lux, HEADER[2]=ldr, HEADER[3]=temp_c etc. vals idx 0->HEADER[1]
-                        col_name = HEADER[idx + 1]
                         nan_cols.append(col_name)
+                # Optional: detect schema mismatch explicitly
+                if len(vals) != len(HEADER) - 2:
+                    # Should have been caught by bad_field_count, but safe fallback
+                    reason = f"schema_mismatch_{len(vals)}vs{len(HEADER)-2}"
+                    rw.writerow([datetime.now().isoformat(timespec="seconds"), line, reason, args.label])
+                    rf.flush()
+                    print(f"rejected ({reason}): {line}")
+                    continue
                 if nan_cols:
                     reason = f"nan_in:{','.join(nan_cols)}"
                     rw.writerow([datetime.now().isoformat(timespec="seconds"), line, reason, args.label])
