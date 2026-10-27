@@ -5,6 +5,30 @@
   Used by BOTH logger.py (data collection) and the backend (live dashboard),
   but only one of them can use the COM port at a time.
 */
+
+/*
+  CSV Contract - Serial Output
+  Columns (6, in order): lux, ldr, temp_c, voltage_v, current_ma, power_mw
+  Units: lux=lux, ldr=raw ADC 0-4095, temp_c=°C, voltage_v=V, current_ma=mA, power_mw=mW
+  Precision: lux=%.1f, ldr=%d, temp_c=%.2f, voltage_v=%.3f, current_ma=%.2f, power_mw=%.2f
+  Rules:
+    - Lines starting with '#' are status messages and must be ignored by CSV parsers.
+    - NAN appears as nan/-nan when a sensor is unavailable or disconnected.
+    - No timestamp in CSV; PC-side reader adds timestamp on reception.
+*/
+
+/*
+  Known Limitations
+    - No Wi-Fi in this firmware.
+    - No Bluetooth in this firmware.
+    - No cloud (ThingSpeak or other) upload from the ESP32.
+    - No TinyML inference on the ESP32.
+    - No timestamp in the CSV output.
+    - INA219 is calibrated for a maximum of 16V / 400mA.
+    - Only one PC program can read the COM port at a time.
+    - Wi-Fi, Bluetooth, cloud, and TinyML are planned for later isolated stages; do not implement them here.
+*/
+
 #include <Wire.h>
 #include <Adafruit_INA219.h>
 #include <BH1750.h>
@@ -34,10 +58,14 @@ void setup() {
   else Serial.println("# ERROR: INA219 not found");
 
   luxOK = lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
-  if (luxOK) lightMeter.setMTreg(32);   // low sensitivity: extends range for direct sun (default clips at ~65k lux)
+  if (luxOK) lightMeter.setMTreg(32);
   else Serial.println("# ERROR: BH1750 not found");
 
   ds.begin();
+  if (ds.getDeviceCount() == 0) {
+    Serial.println("# ERROR: DS18B20 not found");
+  }
+  Serial.println("# FIRMWARE_VERSION=1");
   Serial.println("lux,ldr,temp_c,voltage_v,current_ma,power_mw");
 }
 
@@ -66,6 +94,7 @@ void loop() {
   float p = v * i;
 
   if (v > 8.5f) Serial.println("# WARNING: voltage above 8.5 V - disconnect and check panel!");
+  // Must match CSV header in setup() - 6 fields - increment FIRMWARE_VERSION if changed
   Serial.printf("%.1f,%d,%.2f,%.3f,%.2f,%.2f\n", lux, ldr, t, v, i, p);
   delay(1800);
 }
