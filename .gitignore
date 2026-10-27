@@ -1,3 +1,15 @@
 # B.8 - debug artifact, changes every run, not a deliverable
 rejected_solar_data.csv
 rejected_*.csv
+
+# Stage C - runtime DB, regenerated every startup - Path B2
+solar.db
+solar.db-journal
+solar.db-wal
+solar.db-shm
+solar.db-*
+
+.env
+.env.local
+secrets.h
+**/secrets.h
