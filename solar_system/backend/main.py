@@ -181,8 +181,6 @@ def import_csv_if_exists():
             break
     if not csv_path:
         return 0
-    # Guard: only real rows (simulated=0), not total rows - so DEMO=1 (simulated=1) doesn't block import
-    # Checks WHERE simulated=0, count <10 -> import, else skip (idempotent after first import)
     real_count = run("SELECT COUNT(*) c FROM readings WHERE simulated=0", one=True)
     real_count = real_count["c"] if real_count else 0
     if real_count >= 10:
@@ -206,9 +204,6 @@ def import_csv_if_exists():
                     i = float(row["current_ma"])
                     p = float(row["power_mw"])
                     label = row.get("label", "normal")
-                    # Idempotence: entry = csv-{ts} is UNIQUE, so INSERT OR IGNORE prevents duplicate
-                    # label = predict() output (model), ground_truth = CSV label (human-labeled true state)
-                    # This enables ML accuracy evaluation: compare label vs ground_truth
                     entry_id = f"csv-{ts}-{label}"
                     add_reading(ts, entry_id, lux, ldr, temp, v, i, p, sim=0, ground_truth=label)
                     imported += 1
@@ -454,14 +449,23 @@ def latest():
     r = dict(r)
     today = datetime.now().strftime("%Y-%m-%d")
     t = next((d for d in daily_stats(1) if d["label"] == today), None)
+    # Task 1: sim at top level - bool of simulated column
     return {"reading": r, "advice": ADVICE.get(r["label"], ""), "fault": r["label"] in FAULTS,
-            "today_wh": t["wh"] if t else 0, "model": "ML model" if MODEL else "rule-based"}
+            "today_wh": t["wh"] if t else 0, "model": "ML model" if MODEL else "rule-based",
+            "sim": bool(r.get("simulated", 0))}
 
 @app.get("/api/readings")
 def readings(limit: int = 120):
-    rows = run("SELECT ts,power_mw,lux,voltage_v,current_ma,label,ground_truth FROM readings WHERE string_id=? "
+    # Task 1: include simulated in SELECT and each returned row
+    rows = run("SELECT ts,power_mw,lux,voltage_v,current_ma,label,ground_truth,simulated FROM readings WHERE string_id=? "
                "ORDER BY ts DESC, id DESC LIMIT ?", (STRING_ID, limit))
-    return [dict(r) for r in reversed(rows)]
+    # dict(r) already includes simulated; also add sim alias for consistency
+    result = []
+    for rr in reversed(rows):
+        d = dict(rr)
+        d["sim"] = bool(d.get("simulated", 0))
+        result.append(d)
+    return result
 
 @app.get("/api/daily")
 def daily(days: int = 30):
@@ -518,11 +522,9 @@ def alerts():
         if eps and eps[-1]["label"] == r["label"] and (t - eps[-1]["_end"]).total_seconds() <= 300:
             eps[-1]["_end"] = t
             eps[-1]["end"] = r["ts"]
-            # Keep ground_truth if any reading in episode has it
             if r["ground_truth"] is not None:
                 eps[-1]["ground_truth"] = r["ground_truth"]
         else:
-            # Conditionally include ground_truth only when non-null (cleaner for live data)
             ep = {"label": r["label"], "start": r["ts"], "end": r["ts"], "_end": t}
             if r["ground_truth"] is not None:
                 ep["ground_truth"] = r["ground_truth"]
