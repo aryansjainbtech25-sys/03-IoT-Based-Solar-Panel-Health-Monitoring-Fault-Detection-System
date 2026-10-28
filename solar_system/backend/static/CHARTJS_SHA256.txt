@@ -1,0 +1,7 @@
+# Chart.js 4.4.1 verification
+# File: solar_system/backend/static/chart.umd.min.js
+# Source: https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js
+81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f  chart.umd.min.js
+# Size: 197KB (201755 bytes)
+# Date verified: 2026-10-28
+# Dashboard test: liveChart + histChart render, no console errors
