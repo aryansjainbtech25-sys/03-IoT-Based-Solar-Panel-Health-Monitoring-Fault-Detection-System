@@ -35,6 +35,7 @@
   <div><span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <span class="pill" id="simBadge" style="display:none;background:#a855f7;margin-left:8px">🧪 SIMULATED</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
 </header>
 <main>
+  <div id="errBanner" style="display:none;background:#d73027;color:#fff;padding:12px 16px;border-radius:12px;margin-bottom:16px;font-weight:600">⚠ Backend unreachable — retrying...</div>
   <div class="banner" id="banner">Waiting for data…</div>
   <div class="grid">
     <div class="kpi"><small>Voltage</small><b id="v">–</b></div>
@@ -71,7 +72,25 @@
 const $ = id => document.getElementById(id);
 const COLORS = { normal:'#1a9850', low_light:'#6b7280', partial_shading:'#e08a00', dirty:'#b8860b', open_circuit:'#d73027', short_circuit:'#d73027' };
 const nice = s => s.replaceAll('_', ' ');
-const get = async u => (await fetch(u)).json();
+const get = async u => {
+  const res = await fetch(u);
+  if (!res.ok) throw new Error('fetch failed: ' + u + ' status ' + res.status);
+  return res.json();
+};
+let fetchFailCount = 0; // Task 4: consecutive failures
+function showBannerError() {
+  fetchFailCount++;
+  // Only show after 2 consecutive failures to avoid flicker on transient blip
+  if (fetchFailCount >= 2) {
+    const eb = $('errBanner');
+    if (eb) eb.style.display = 'block';
+  }
+}
+function hideBannerError() {
+  fetchFailCount = 0;
+  const eb = $('errBanner');
+  if (eb) eb.style.display = 'none';
+}
 let liveChart, histChart, period = 'daily', sound = false, lastLabel = null;
 let lastAgeSeconds = null, lastReadingTime = null;
 function beep() { try { const c = new (window.AudioContext || window.webkitAudioContext)(); const o = c.createOscillator();
@@ -137,14 +156,16 @@ function updateAgeUI() {
   }
 }
 async function refreshLive() {
-  const L = await get('/api/latest');
-  if (!L.reading) { $('status').textContent = 'No data yet'; return; }
-  // Task 3: SIMULATED badge based on L.sim (requires Task 1 backend)
-  const simBadge = $('simBadge');
-  if (simBadge) {
-    simBadge.style.display = L.sim ? 'inline-block' : 'none';
-  }
-  const r = L.reading, c = COLORS[r.label] || '#6b7280';
+  try {
+    const L = await get('/api/latest');
+    hideBannerError(); // Task 4: success clears error
+    if (!L.reading) { $('status').textContent = 'No data yet'; return; }
+    // Task 3: SIMULATED badge based on L.sim (requires Task 1 backend)
+    const simBadge = $('simBadge');
+    if (simBadge) {
+      simBadge.style.display = L.sim ? 'inline-block' : 'none';
+    }
+    const r = L.reading, c = COLORS[r.label] || '#6b7280';
   // Task 2: compute age from server timestamp (local time)
   const parsedTime = parseTimestamp(r.ts);
   lastReadingTime = parsedTime;
@@ -191,17 +212,28 @@ async function refreshLive() {
     options: { animation: false, scales: { y: { title: { display: true, text: 'mW' } },
       y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'lux' } } } } });
   else { liveChart.data = data; liveChart.update(); }
+  } catch (e) {
+    console.warn('refreshLive failed:', e.message);
+    showBannerError();
+    return;
+  }
 }
 async function refreshHealth() {
-  const H = await get('/api/health');
+  try {
+    const H = await get('/api/health');
   if (H.health_pct == null) { $('hp').textContent = '–'; $('aging').textContent = 'Needs at least 8 days of data.'; return; }
   $('hp').textContent = H.health_pct + ' %';
   const a = H.aging_pct_per_month;
   $('aging').textContent = 'Trend: ' + (a > 0 ? '+' : '') + a + ' % per month (performance ratio)';
   $('simnote').textContent = H.sim ? 'Includes SIMULATED demo history (accelerated aging).' : '';
+  } catch (e) {
+    console.warn('refreshHealth failed:', e.message);
+    showBannerError();
+  }
 }
 async function refreshHist() {
-  const d = await get('/api/' + period);
+  try {
+    const d = await get('/api/' + period);
   const data = { labels: d.map(x => x.label), datasets: [
     { type: 'bar', label: 'Energy (Wh)', data: d.map(x => x.wh), backgroundColor: '#60a5fa', yAxisID: 'y' },
     { type: 'line', label: 'Performance ratio (%)', data: d.map(x => x.pr != null ? +(x.pr * 100).toFixed(1) : null),
@@ -213,11 +245,20 @@ async function refreshHist() {
   if (period === 'monthly') note += d.filter(x => x.change_pct != null).map(x => x.label + ': ' + (x.change_pct > 0 ? '+' : '') + x.change_pct + '%').join(' · ');
   if (period === 'weekly' && d.length) { const w = d[d.length - 1]; note += 'Latest week best day ' + w.best_day + ', worst day ' + w.worst_day + ', ' + w.faults + ' fault(s).'; }
   $('histnote').textContent = note;
+  } catch (e) {
+    console.warn('refreshHist failed:', e.message);
+    showBannerError();
+  }
 }
 async function refreshAlerts() {
-  const a = await get('/api/alerts');
+  try {
+    const a = await get('/api/alerts');
   $('alerts').innerHTML = a.length ? a.map(x => `<tr><td><b style="color:${COLORS[x.label]}">${nice(x.label)}</b></td><td>${x.start}</td><td>${x.end}</td><td>${x.advice}</td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">No faults recorded.</td></tr>';
+  } catch (e) {
+    console.warn('refreshAlerts failed:', e.message);
+    showBannerError();
+  }
 }
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
