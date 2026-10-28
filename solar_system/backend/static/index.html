@@ -35,7 +35,7 @@
 <body>
 <header>
   <h1>☀ Solar Panel Health Monitor</h1>
-  <div><span id="conn" class="pill" style="background:#6b7280;font-size:12px" title="Connection status"><span id="connDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;vertical-align:middle"></span><span id="connText">—</span></span> <span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <span class="pill" id="simBadge" style="display:none;background:#a855f7;margin-left:8px">🧪 SIMULATED</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
+  <div><span id="conn" class="pill" style="background:#6b7280;font-size:12px" title="Connection status"><span id="connDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;vertical-align:middle"></span><span id="connText">—</span></span> <span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <span class="pill" id="simBadge" title="SIMULATED badge reflects only most recent reading. In mixed mode (SERIAL_PORT+DEMO=1), history may contain both real and simulated. Use pure modes for clean demo." style="display:none;background:#a855f7;margin-left:8px">🧪 SIMULATED</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
 </header>
 <main>
   <div id="errBanner" style="display:none;background:#d73027;color:#fff;padding:12px 16px;border-radius:12px;margin-bottom:16px;font-weight:600">⚠ Backend unreachable — retrying...</div>
@@ -338,3 +338,33 @@ async function refreshAlerts() {
         b.style.color = COLORS[x.label] || '#6b7280';
         b.textContent = nice(x.label);
         tdLabel.appendChild(b);
+        tr.appendChild(tdLabel);
+        const tdStart = document.createElement('td');
+        tdStart.textContent = x.start;
+        tr.appendChild(tdStart);
+        const tdEnd = document.createElement('td');
+        tdEnd.textContent = x.end;
+        tr.appendChild(tdEnd);
+        const tdAdvice = document.createElement('td');
+        tdAdvice.textContent = x.advice;
+        tr.appendChild(tdAdvice);
+        tbody.appendChild(tr);
+      }
+    }
+  } catch (e) {
+    console.warn('refreshAlerts failed:', e.message);
+    showBannerError();
+  }
+}
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); period = b.dataset.p; refreshHist();
+});
+refreshLive(); refreshHealth(); refreshHist(); refreshAlerts();
+setInterval(refreshLive, 5000);
+setInterval(updateAgeUI, 1000); // Task 2: update age display every second
+setInterval(() => { refreshHealth(); refreshAlerts(); }, 30000);
+setInterval(refreshHist, 60000);
+</script>
+</body>
+</html>
