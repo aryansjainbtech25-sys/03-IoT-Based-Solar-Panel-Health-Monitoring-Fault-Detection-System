@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solar Panel Health Monitor</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="chart.umd.min.js"></script>
 <style>
   :root { --bg:#f4f6f8; --card:#fff; --text:#1c2733; --muted:#6b7785; --line:#e2e7ec; }
   @media (prefers-color-scheme: dark) { :root { --bg:#12171d; --card:#1b232c; --text:#e8edf2; --muted:#93a0ad; --line:#2b3641; } }
@@ -25,16 +25,17 @@
   .tabs button.on { background:#2563eb; color:#fff; border-color:#2563eb; }
   table { width:100%; border-collapse:collapse; font-size:14px; } td,th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
   .muted { color:var(--muted); font-size:13px; } .wrap { overflow-x:auto; } canvas { max-height:300px; }
+  #stale { animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0% { opacity:1 } 50% { opacity:0.6 } 100% { opacity:1 } }
 </style>
 </head>
 <body>
 <header>
-  <h1>☀️ Solar Panel Health Monitor</h1>
-  <div><span class="muted" id="meta"></span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
+  <h1>☀ Solar Panel Health Monitor</h1>
+  <div><span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
 </header>
 <main>
   <div class="banner" id="banner">Waiting for data…</div>
-
   <div class="grid">
     <div class="kpi"><small>Voltage</small><b id="v">–</b></div>
     <div class="kpi"><small>Current</small><b id="i">–</b></div>
@@ -44,7 +45,6 @@
     <div class="kpi"><small>Performance ratio</small><b id="pr">–</b></div>
     <div class="kpi"><small>Energy today</small><b id="wh">–</b></div>
   </div>
-
   <div class="two">
     <div class="card"><h2>Live power and light</h2><canvas id="liveChart"></canvas></div>
     <div class="card">
@@ -55,7 +55,6 @@
       <div class="muted" id="simnote"></div>
     </div>
   </div>
-
   <div class="card">
     <div class="tabs" style="margin-bottom:10px">
       <button data-p="daily" class="on">Daily</button><button data-p="weekly">Weekly</button><button data-p="monthly">Monthly</button>
@@ -63,27 +62,90 @@
     <canvas id="histChart"></canvas>
     <div class="muted" id="histnote" style="margin-top:8px"></div>
   </div>
-
   <div class="card">
     <h2>Fault alerts</h2>
     <div class="wrap"><table><thead><tr><th>Fault</th><th>Started</th><th>Last seen</th><th>Suggested action</th></tr></thead><tbody id="alerts"></tbody></table></div>
   </div>
 </main>
-
 <script>
 const $ = id => document.getElementById(id);
 const COLORS = { normal:'#1a9850', low_light:'#6b7280', partial_shading:'#e08a00', dirty:'#b8860b', open_circuit:'#d73027', short_circuit:'#d73027' };
 const nice = s => s.replaceAll('_', ' ');
 const get = async u => (await fetch(u)).json();
 let liveChart, histChart, period = 'daily', sound = false, lastLabel = null;
+let lastAgeSeconds = null, lastReadingTime = null;
 function beep() { try { const c = new (window.AudioContext || window.webkitAudioContext)(); const o = c.createOscillator();
   o.frequency.value = 880; o.connect(c.destination); o.start(); setTimeout(() => { o.stop(); c.close(); }, 500); } catch (e) {} }
 $('snd').onclick = () => { sound = !sound; $('snd').textContent = sound ? '🔔 Sound alerts on' : '🔕 Sound alerts off'; if (sound) beep(); };
-
+function parseTimestamp(ts) {
+  // Safe local time parse: backend sends YYYY-MM-DD HH:MM:SS in PC local time
+  // Using replace(' ', 'T') ensures local parsing, not UTC (see Task 2)
+  return new Date(ts.replace(' ', 'T'));
+}
+function updateAgeUI() {
+  if (lastReadingTime == null) return;
+  const age = Math.floor((Date.now() - lastReadingTime.getTime()) / 1000);
+  lastAgeSeconds = age;
+  const ageEl = $('age');
+  if (ageEl) {
+    if (age < 60) ageEl.textContent = `· ${age}s ago`;
+    else if (age < 3600) ageEl.textContent = `· ${Math.floor(age/60)}m ${age%60}s ago`;
+    else ageEl.textContent = `· ${Math.floor(age/3600)}h ago`;
+  }
+  const staleEl = $('stale');
+  const statusEl = $('status');
+  if (age > 30) {
+    if (staleEl) staleEl.style.display = 'inline-block';
+    // Keep status color red when stale, but preserve original label via data attr
+    if (statusEl && !statusEl.dataset.orig) {
+      statusEl.dataset.orig = statusEl.textContent;
+      statusEl.dataset.origBg = statusEl.style.background;
+    }
+    // Visual STALE warning - modify status pill to show STALE if not already
+    if (statusEl && !statusEl.textContent.includes('STALE')) {
+      // Don't overwrite fault color permanently, just add warning
+      statusEl.textContent = statusEl.textContent + ' • STALE';
+    }
+    if (statusEl) statusEl.style.background = '#d73027';
+    // Also banner warning
+    const banner = $('banner');
+    if (banner && !banner.dataset.stale) {
+      banner.dataset.origText = banner.textContent;
+      banner.dataset.stale = '1';
+      banner.textContent = '⚠ STALE DATA — last reading ' + age + 's ago — ' + banner.textContent;
+      banner.style.background = '#d73027';
+    } else if (banner) {
+      // Update age in banner
+      banner.textContent = '⚠ STALE DATA — last reading ' + age + 's ago — ' + (banner.dataset.origText || '');
+    }
+  } else {
+    if (staleEl) staleEl.style.display = 'none';
+    if (statusEl && statusEl.dataset.orig) {
+      // Restore original status if it was overwritten
+      // Will be refreshed on next fetch anyway, but clear flag
+      delete statusEl.dataset.orig;
+      delete statusEl.dataset.origBg;
+    }
+    const banner = $('banner');
+    if (banner && banner.dataset.stale) {
+      // Restore banner - will be overwritten by next refreshLive, but clear for now
+      if (banner.dataset.origText) banner.textContent = banner.dataset.origText;
+      banner.style.background = '';
+      delete banner.dataset.stale;
+      delete banner.dataset.origText;
+    }
+  }
+}
 async function refreshLive() {
   const L = await get('/api/latest');
   if (!L.reading) { $('status').textContent = 'No data yet'; return; }
   const r = L.reading, c = COLORS[r.label] || '#6b7280';
+  // Task 2: compute age from server timestamp (local time)
+  const parsedTime = parseTimestamp(r.ts);
+  lastReadingTime = parsedTime;
+  lastAgeSeconds = (Date.now() - parsedTime.getTime()) / 1000;
+  // Store for debugging timezone issues: if age jump ~offset, parsing is wrong
+  updateAgeUI();
   $('v').textContent = r.voltage_v.toFixed(2) + ' V';
   $('i').textContent = r.current_ma.toFixed(1) + ' mA';
   $('p').textContent = r.power_mw.toFixed(1) + ' mW';
@@ -92,13 +154,17 @@ async function refreshLive() {
   $('pr').textContent = r.pr != null ? Math.round(r.pr * 100) + ' %' : '–';
   $('wh').textContent = L.today_wh.toFixed(2) + ' Wh';
   $('status').textContent = nice(r.label); $('status').style.background = c;
+  // If currently stale, updateAgeUI will turn it red again, but we need to preserve label for restore
+  if (lastAgeSeconds > 30) {
+    $('status').textContent = nice(r.label) + ' • STALE';
+    $('status').style.background = '#d73027';
+  }
   $('banner').style.background = c;
-  $('banner').textContent = (L.fault ? '⚠️ ' : '') + L.advice;
+  $('banner').textContent = (L.fault ? '⚠ ' : '') + L.advice;
   document.title = (L.fault ? '⚠ ' + nice(r.label) + ' - ' : '') + 'Solar Panel Health Monitor';
   if (L.fault && lastLabel !== r.label && sound) beep();
   lastLabel = r.label;
   $('meta').textContent = 'Detector: ' + L.model + ' · last reading ' + r.ts;
-
   const rows = await get('/api/readings?limit=120');
   const data = { labels: rows.map(x => x.ts.slice(11, 19)),
     datasets: [
@@ -109,7 +175,6 @@ async function refreshLive() {
       y1: { position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'lux' } } } } });
   else { liveChart.data = data; liveChart.update(); }
 }
-
 async function refreshHealth() {
   const H = await get('/api/health');
   if (H.health_pct == null) { $('hp').textContent = '–'; $('aging').textContent = 'Needs at least 8 days of data.'; return; }
@@ -118,7 +183,6 @@ async function refreshHealth() {
   $('aging').textContent = 'Trend: ' + (a > 0 ? '+' : '') + a + ' % per month (performance ratio)';
   $('simnote').textContent = H.sim ? 'Includes SIMULATED demo history (accelerated aging).' : '';
 }
-
 async function refreshHist() {
   const d = await get('/api/' + period);
   const data = { labels: d.map(x => x.label), datasets: [
@@ -133,20 +197,18 @@ async function refreshHist() {
   if (period === 'weekly' && d.length) { const w = d[d.length - 1]; note += 'Latest week best day ' + w.best_day + ', worst day ' + w.worst_day + ', ' + w.faults + ' fault(s).'; }
   $('histnote').textContent = note;
 }
-
 async function refreshAlerts() {
   const a = await get('/api/alerts');
   $('alerts').innerHTML = a.length ? a.map(x => `<tr><td><b style="color:${COLORS[x.label]}">${nice(x.label)}</b></td><td>${x.start}</td><td>${x.end}</td><td>${x.advice}</td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">No faults recorded.</td></tr>';
 }
-
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
   b.classList.add('on'); period = b.dataset.p; refreshHist();
 });
-
 refreshLive(); refreshHealth(); refreshHist(); refreshAlerts();
 setInterval(refreshLive, 5000);
+setInterval(updateAgeUI, 1000); // Task 2: update age display every second
 setInterval(() => { refreshHealth(); refreshAlerts(); }, 30000);
 setInterval(refreshHist, 60000);
 </script>
