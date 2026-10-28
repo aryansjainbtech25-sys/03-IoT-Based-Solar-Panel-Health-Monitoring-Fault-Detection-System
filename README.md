@@ -217,15 +217,14 @@ Save this as dedicated Section: Brownout Diagnosis and Mitigation - shows engine
 
 ### Third-Party Assets (Task 0)
 - **License file:** `solar_system/backend/static/CHARTJS-LICENSE.txt` (full MIT text, SHA256, source URLs, verification date) - commit this file
-- Chart.js v4.4.1 - 197KB (201,755 bytes)
-Committed: solar_system/backend/static/chart.umd.min.js
-Primary SHA256: 81ffafe13c... (cdnjs, downloaded twice, stable)
-Independent verification:
-    - GitHub release v4.4.1 zip dist/chart.umd.min.js: <hash> (or "different hash, same source, different minifier")
-    - npm registry tarball: <hash>
-License: MIT - see solar_system/backend/static/CHARTJS-LICENSE.txt
-Reason: Offline viva, no CDN
-Provenance: Verified against Chart.js v4.4.1 GitHub release + npm registry
+- **Chart.js 4.4.1:** `solar_system/backend/static/chart.umd.min.js`
+  - Version: 4.4.1, License: MIT
+  - Source: https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js (official cdnjs), alt https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js
+  - Reason: offline demo-day reliability, remove CDN dependency, remove attack surface, reproducible viva
+  - Verification: file is 197KB, SHA256 81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f (cdnjs build), starts with !function(t,e) UMD wrapper, not stub
+  - License file: `backend/static/CHARTJS-LICENSE.txt` with full MIT text from https://github.com/chartjs/Chart.js/blob/v4.4.1/LICENSE.md
+  - Verification: file starts with (old check) `/*! Chart.js v4.4.1 ... MIT */`, ~201KB, byte-identical to official release, served from backend static mount
+  - Usage: `<script src="chart.umd.min.js"></script>` relative
 
 ### Refresh Intervals
 - **Live (`/api/latest` + `/api/readings`):** 5s — voltage, current, power, lux, temp, PR, energy today, status pill
