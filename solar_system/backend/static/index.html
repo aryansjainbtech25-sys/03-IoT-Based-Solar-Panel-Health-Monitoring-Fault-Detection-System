@@ -26,13 +26,16 @@
   table { width:100%; border-collapse:collapse; font-size:14px; } td,th { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
   .muted { color:var(--muted); font-size:13px; } .wrap { overflow-x:auto; } canvas { max-height:300px; }
   #stale { animation: pulse 1.5s infinite; }
+  .age-fresh { color: var(--muted); }
+  .age-warn { color: #e08a00; font-weight:600; }
+  .age-stale { color: #d73027; font-weight:700; }
   @keyframes pulse { 0% { opacity:1 } 50% { opacity:0.6 } 100% { opacity:1 } }
 </style>
 </head>
 <body>
 <header>
   <h1>☀ Solar Panel Health Monitor</h1>
-  <div><span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <span class="pill" id="simBadge" style="display:none;background:#a855f7;margin-left:8px">🧪 SIMULATED</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
+  <div><span id="conn" class="pill" style="background:#6b7280;font-size:12px" title="Connection status"><span id="connDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;margin-right:6px;vertical-align:middle"></span><span id="connText">—</span></span> <span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <span class="pill" id="simBadge" style="display:none;background:#a855f7;margin-left:8px">🧪 SIMULATED</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
 </header>
 <main>
   <div id="errBanner" style="display:none;background:#d73027;color:#fff;padding:12px 16px;border-radius:12px;margin-bottom:16px;font-weight:600">⚠ Backend unreachable — retrying...</div>
@@ -51,7 +54,7 @@
     <div class="card">
       <h2>Panel health and aging</h2>
       <div style="font-size:34px;font-weight:700" id="hp">–</div>
-      <div class="muted" id="hdesc">Performance vs. the first week of data</div>
+      <div class="muted" id="hdesc">Recent 7-day performance compared to the first 7 days (100% = no change) <span title="Performance ratio = measured power / expected power from light. Compares recent 7 days vs first 7 days. Limitations: weather variation, dust, no ground-truth labels, short-term noise." style="cursor:help;border:1px solid var(--line);border-radius:50%;display:inline-block;width:18px;height:18px;text-align:center;line-height:16px;font-size:12px;margin-left:4px">?</span></div>
       <p id="aging" style="margin-top:12px">–</p>
       <div class="muted" id="simnote"></div>
     </div>
@@ -72,14 +75,30 @@
 const $ = id => document.getElementById(id);
 const COLORS = { normal:'#1a9850', low_light:'#6b7280', partial_shading:'#e08a00', dirty:'#b8860b', open_circuit:'#d73027', short_circuit:'#d73027' };
 const nice = s => s.replaceAll('_', ' ');
-const get = async u => {
-  const res = await fetch(u);
-  if (!res.ok) throw new Error('fetch failed: ' + u + ' status ' + res.status);
-  return res.json();
-};
 let fetchFailCount = 0; // Task 4: consecutive failures
+let consecutiveFailures = 0; // Task 5: connection status
+let lastFetchLatencyMs = null; // Task 5
+
+const get = async u => {
+  const start = Date.now();
+  try {
+    const res = await fetch(u);
+    if (!res.ok) throw new Error('fetch failed: ' + u + ' status ' + res.status);
+    const data = await res.json();
+    lastFetchLatencyMs = Date.now() - start;
+    consecutiveFailures = 0;
+    fetchFailCount = 0;
+    return data;
+  } catch (e) {
+    lastFetchLatencyMs = Date.now() - start;
+    consecutiveFailures++;
+    fetchFailCount++;
+    throw e;
+  }
+};
+
 function showBannerError() {
-  fetchFailCount++;
+  refreshConnStatus();
   // Only show after 2 consecutive failures to avoid flicker on transient blip
   if (fetchFailCount >= 2) {
     const eb = $('errBanner');
@@ -87,9 +106,36 @@ function showBannerError() {
   }
 }
 function hideBannerError() {
-  fetchFailCount = 0;
   const eb = $('errBanner');
   if (eb) eb.style.display = 'none';
+  refreshConnStatus();
+}
+
+function refreshConnStatus() {
+  // Task 5: Online / Slow / Offline distinct from stale-data warning
+  const dot = $('connDot');
+  const txt = $('connText');
+  const pill = $('conn');
+  if (!dot || !txt || !pill) return;
+  if (consecutiveFailures >= 2) {
+    // Offline - red
+    dot.style.background = '#ef4444';
+    txt.textContent = 'Offline';
+    pill.style.background = '#7f1d1d';
+    pill.title = consecutiveFailures + ' consecutive failures';
+  } else if (consecutiveFailures === 1 || (lastFetchLatencyMs != null && lastFetchLatencyMs > 2000)) {
+    // Slow - amber
+    dot.style.background = '#f59e0b';
+    txt.textContent = lastFetchLatencyMs > 2000 ? 'Slow (' + Math.round(lastFetchLatencyMs/100)/10 + 's)' : 'Slow';
+    pill.style.background = '#92400e';
+    pill.title = 'Last fetch ' + (lastFetchLatencyMs || 0) + 'ms';
+  } else {
+    // Online - green
+    dot.style.background = '#22c55e';
+    txt.textContent = 'Online';
+    pill.style.background = '#166534';
+    pill.title = 'Last fetch ' + (lastFetchLatencyMs != null ? lastFetchLatencyMs + 'ms' : 'ok');
+  }
 }
 let liveChart, histChart, period = 'daily', sound = false, lastLabel = null;
 let lastAgeSeconds = null, lastReadingTime = null;
@@ -102,15 +148,34 @@ function parseTimestamp(ts) {
   return new Date(ts.replace(' ', 'T'));
 }
 function updateAgeUI() {
-  if (lastReadingTime == null) return;
+  // Task 6: Last updated age indicator - ticks every second, UI clock not data fetch
+  if (lastReadingTime == null) {
+    const ageEl = $('age');
+    if (ageEl) ageEl.textContent = '· –';
+    refreshConnStatus();
+    return;
+  }
   const age = Math.floor((Date.now() - lastReadingTime.getTime()) / 1000);
   lastAgeSeconds = age;
   const ageEl = $('age');
   if (ageEl) {
+    // Task 6 formatting
     if (age < 60) ageEl.textContent = `· ${age}s ago`;
     else if (age < 3600) ageEl.textContent = `· ${Math.floor(age/60)}m ${age%60}s ago`;
-    else ageEl.textContent = `· ${Math.floor(age/3600)}h ago`;
+    else if (age < 86400) ageEl.textContent = `· ${Math.floor(age/3600)}h ${Math.floor((age%3600)/60)}m ago`;
+    else ageEl.textContent = `· ${Math.floor(age/86400)}d ago`;
+    // Apply freshness classes for color change at 30s (Task 2 + 6)
+    ageEl.classList.remove('age-fresh','age-warn','age-stale');
+    if (age > 30 && age <= 60) {
+      ageEl.classList.add('age-warn');
+    } else if (age > 60) {
+      ageEl.classList.add('age-stale');
+    } else {
+      ageEl.classList.add('age-fresh');
+    }
   }
+  // Task 5: update connection status each second as well
+  refreshConnStatus();
   const staleEl = $('stale');
   const statusEl = $('status');
   if (age > 30) {
@@ -199,6 +264,7 @@ async function refreshLive() {
   }
   // Task 3 also update meta to show source?
   // meta already shows detector, we keep sim info in badge
+
   document.title = (L.fault ? '⚠ ' + nice(r.label) + ' - ' : '') + 'Solar Panel Health Monitor';
   if (L.fault && lastLabel !== r.label && sound) beep();
   lastLabel = r.label;
@@ -224,7 +290,7 @@ async function refreshHealth() {
   if (H.health_pct == null) { $('hp').textContent = '–'; $('aging').textContent = 'Needs at least 8 days of data.'; return; }
   $('hp').textContent = H.health_pct + ' %';
   const a = H.aging_pct_per_month;
-  $('aging').textContent = 'Trend: ' + (a > 0 ? '+' : '') + a + ' % per month (performance ratio)';
+  $('aging').textContent = 'Performance ratio trend: ' + (a > 0 ? '+' : '') + a + ' % per month (negative = gradually declining)';
   $('simnote').textContent = H.sim ? 'Includes SIMULATED demo history (accelerated aging).' : '';
   } catch (e) {
     console.warn('refreshHealth failed:', e.message);
@@ -253,22 +319,22 @@ async function refreshHist() {
 async function refreshAlerts() {
   try {
     const a = await get('/api/alerts');
-  $('alerts').innerHTML = a.length ? a.map(x => `<tr><td><b style="color:${COLORS[x.label]}">${nice(x.label)}</b></td><td>${x.start}</td><td>${x.end}</td><td>${x.advice}</td></tr>`).join('')
-    : '<tr><td colspan="4" class="muted">No faults recorded.</td></tr>';
-  } catch (e) {
-    console.warn('refreshAlerts failed:', e.message);
-    showBannerError();
-  }
-}
-document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('on'));
-  b.classList.add('on'); period = b.dataset.p; refreshHist();
-});
-refreshLive(); refreshHealth(); refreshHist(); refreshAlerts();
-setInterval(refreshLive, 5000);
-setInterval(updateAgeUI, 1000); // Task 2: update age display every second
-setInterval(() => { refreshHealth(); refreshAlerts(); }, 30000);
-setInterval(refreshHist, 60000);
-</script>
-</body>
-</html>
+    const tbody = $('alerts');
+    // Task 8: Safe DOM construction - no innerHTML to avoid XSS if source changes
+    tbody.textContent = '';
+    if (a.length === 0) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 4;
+      td.className = 'muted';
+      td.textContent = 'No faults recorded.';
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    } else {
+      for (const x of a) {
+        const tr = document.createElement('tr');
+        const tdLabel = document.createElement('td');
+        const b = document.createElement('b');
+        b.style.color = COLORS[x.label] || '#6b7280';
+        b.textContent = nice(x.label);
+        tdLabel.appendChild(b);
