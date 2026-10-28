@@ -1,15 +1,17 @@
-# B.8 - debug artifact, changes every run, not a deliverable
-rejected_solar_data.csv
-rejected_*.csv
-
-# Stage C - runtime DB, regenerated every startup - Path B2
-solar.db
-solar.db-journal
-solar.db-wal
-solar.db-shm
-solar.db-*
-
+# Env secrets - MUST be ignored
 .env
 .env.local
+*.env
+!*.env.example
+
+# Arduino secrets - MUST be ignored
 secrets.h
 **/secrets.h
+**/esp32/**/secrets.h
+secrets_*.h
+
+# DB
+*.db
+*.sqlite3
+__pycache__/
+.venv/
