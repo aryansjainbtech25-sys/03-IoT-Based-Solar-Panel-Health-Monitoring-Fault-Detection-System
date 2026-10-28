@@ -32,7 +32,7 @@
 <body>
 <header>
   <h1>☀ Solar Panel Health Monitor</h1>
-  <div><span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
+  <div><span class="muted" id="meta"></span> <span class="muted" id="age" style="margin-left:8px"></span> <span class="pill" id="stale" style="display:none;background:#d73027;margin-left:8px">⚠ STALE</span> <span class="pill" id="simBadge" style="display:none;background:#a855f7;margin-left:8px">🧪 SIMULATED</span> <button id="snd" style="margin:0 8px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer">🔕 Sound alerts off</button> <span class="pill" id="status">Loading…</span></div>
 </header>
 <main>
   <div class="banner" id="banner">Waiting for data…</div>
@@ -139,6 +139,11 @@ function updateAgeUI() {
 async function refreshLive() {
   const L = await get('/api/latest');
   if (!L.reading) { $('status').textContent = 'No data yet'; return; }
+  // Task 3: SIMULATED badge based on L.sim (requires Task 1 backend)
+  const simBadge = $('simBadge');
+  if (simBadge) {
+    simBadge.style.display = L.sim ? 'inline-block' : 'none';
+  }
   const r = L.reading, c = COLORS[r.label] || '#6b7280';
   // Task 2: compute age from server timestamp (local time)
   const parsedTime = parseTimestamp(r.ts);
@@ -159,8 +164,20 @@ async function refreshLive() {
     $('status').textContent = nice(r.label) + ' • STALE';
     $('status').style.background = '#d73027';
   }
+  // Task 3: tint banner when simulated (optional subtle cue) - but don't override STALE red
+  // Preserve STALE state check later; base color is fault color
   $('banner').style.background = c;
   $('banner').textContent = (L.fault ? '⚠ ' : '') + L.advice;
+  // If simulated, add simulated prefix to banner if not stale (stale takes priority)
+  if (L.sim && lastAgeSeconds <= 30) {
+    $('banner').textContent = '🧪 SIMULATED — ' + $('banner').textContent;
+    // Subtle tint: add purple border instead of changing bg to keep fault color visible
+    $('banner').style.border = '2px dashed #a855f7';
+  } else if (!L.sim) {
+    $('banner').style.border = '';
+  }
+  // Task 3 also update meta to show source?
+  // meta already shows detector, we keep sim info in badge
   document.title = (L.fault ? '⚠ ' + nice(r.label) + ' - ' : '') + 'Solar Panel Health Monitor';
   if (L.fault && lastLabel !== r.label && sound) beep();
   lastLabel = r.label;
