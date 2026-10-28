@@ -1,6 +1,15 @@
+# Backend requirements - for reproducibility (Point 2c)
 fastapi
 uvicorn
-requests
 pyserial
-joblib
+requests
+python-dotenv
+
+# ML training (train.py) - for full project
 scikit-learn
+pandas
+joblib
+numpy
+
+# Optional - for calibration
+# matplotlib  # for plots in train.py if used
