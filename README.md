@@ -30,9 +30,9 @@ SDA->21, SCL->22, LDR->34 + 3.3V divider, DS18B20->4 with 4.7k pullup, INA219 VI
 ├── solar_system/
 │   ├── backend/
 │   │   ├── static/
-│   │   │   ├── index.html (live dashboard - OFFLINE, uses local chart.umd.min.js)
+│   │   │   ├── index.html (live dashboard - OFFLINE, uses local chart.umd.min.js, Tasks 2-8)
 │   │   │   └── chart.umd.min.js (v4.4.1 vendored, ~201KB, no CDN needed for demo/viva)
-│   │   ├── main.py (Stage C - USB + ThingSpeak + ground_truth + CSV importer + dotenv)
+│   │   ├── main.py (Stage C - USB + ThingSpeak + ground_truth + CSV importer + dotenv + Task1 sim flag)
 │   │   ├── train.py (Stage D - generates model.joblib + calib.json)
 │   │   ├── .env.example (committed placeholder)
 │   │   ├── .env (gitignored, real keys - ROTATED)
@@ -54,7 +54,7 @@ SDA->21, SCL->22, LDR->34 + 3.3V divider, DS18B20->4 with 4.7k pullup, INA219 VI
 ├── requirements.txt (root - fastapi, uvicorn, pyserial, requests, python-dotenv, sklearn, pandas, joblib, numpy)
 ├── .env.example (root placeholder)
 ├── .gitignore (blocks .env, *.env, secrets.h, **/secrets.h, *.db, rejected_*.csv, __pycache__)
-└── README.md (this file - updated with all fixes till now)
+└── README.md (this file - updated with Tasks 0-11)
 ```
 
 ## Firmware Setup
@@ -135,7 +135,8 @@ Test Evidence 12-Test Table - see original report for exact console outputs. 11 
 ### API Changes (Phase 3 - DONE)
 - **/api/alerts:** Returns 4 keys (label,start,end,advice) for live data, 5 keys (+ ground_truth) when DEMO=1 or CSV import provides truth. ground_truth omitted when null (cleaner, not null-filled). Episode grouping: consecutive same-label within 300s = one episode, last non-null ground_truth wins if mixed.
 - **/api/monthly:** change_pct null on first entry (no previous month), sim flag indicates simulated vs real (simulated=0 real, 1 simulated)
-- **/api/readings:** Now includes ground_truth column for eval
+- **/api/readings:** Now includes ground_truth + simulated columns for eval + Task1 sim flag
+- **/api/latest:** Task1 - returns top-level `sim: bool(r.simulated)` + reading dict contains `simulated` (Tasks 1,3)
 - **MAX_TS_AGE_HOURS:** Cloud ingestion guard 24h default, filters ThingSpeak feeds older than 24h (prevents old cloud data polluting live DB)
 - **Startup banner:** Shows enabled sources (Serial, ThingSpeak, Demo, History), model (ML vs rule-based), calibration, one-reader warning
 - **Poll loop:** Maps field1..6 to lux,ldr,temp_c,voltage_v,current_ma,power_mw exactly matching solar_thingspeak.ino
@@ -159,7 +160,7 @@ Solution:
 ### One-Reader Rule (DONE)
 Only one program can read ESP32 USB port at a time. Close logger.py and Arduino Serial Monitor before starting main.py. Startup banner notes this, serial_loop has loud-first-failure with message "Could not open port X — is another program using it?"
 
-### Dashboard Offline Vendoring (NEW - DONE)
+### Dashboard Offline Vendoring (Task 0 - DONE)
 - **Problem:** Original index.html used CDN `https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js` / `cdn.jsdelivr.net` — fails in viva without internet, external dependency.
 - **Fix:** Vendored Chart.js v4.4.1 locally as `solar_system/backend/static/chart.umd.min.js` (201KB official, MIT license)
 - **index.html change:** `<script src="chart.umd.min.js"></script>` (relative, no CDN), all charts work offline
@@ -206,12 +207,105 @@ Full fix requires hardware not available during project. Mitigation extends runt
 ### Report Section
 Save this as dedicated Section: Brownout Diagnosis and Mitigation - shows engineering judgment, moves grade from good to excellent.
 
-## Dashboard
-- Live serial -> FastAPI -> static/index.html (Chart.js v4.4.1 vendored offline)
+## Dashboard (Updated - Tasks 0-11)
+
+- Live serial -> FastAPI -> static/index.html (Chart.js v4.4.1 vendored offline, no CDN)
 - Charts: power_mw last 120 readings (line), daily Wh (bar), latest reading, alerts
 - APIs: /api/latest, /api/readings, /api/daily, /api/weekly, /api/monthly, /api/health, /api/alerts
 - No CDN, works offline - chart.umd.min.js local
-- Auto-refresh every 5s
+- Auto-refresh: live 5s, connection & age 1s, health/alerts 30s, historical 60s
+
+### Third-Party Assets (Task 0)
+- **Chart.js 4.4.1:** `solar_system/backend/static/chart.umd.min.js`
+  - Version: 4.4.1, License: MIT
+  - Source: https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js (official cdnjs), alt https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js
+  - Reason: offline demo-day reliability, remove CDN dependency, remove attack surface, reproducible viva
+  - Verification: file starts with `/*! Chart.js v4.4.1 ... MIT */`, ~201KB, byte-identical to official release, served from backend static mount
+  - Usage: `<script src="chart.umd.min.js"></script>` relative
+
+### Refresh Intervals
+- **Live (`/api/latest` + `/api/readings`):** 5s — voltage, current, power, lux, temp, PR, energy today, status pill
+- **Connection status + Age UI:** 1s tick — age `· 0s ago` → `· 1s ago` (Task 6), connection dot updates on each fetch (Task 5)
+- **Health & Alerts (`/api/health`, `/api/alerts`):** 30s — health %, aging trend, fault episodes
+- **Historical (`/api/daily|weekly|monthly`):** 60s — daily Wh bar + PR line
+
+### Stale-Data Warning (Task 2 - Essential)
+- **Threshold:** 30 seconds (age of most recent reading)
+- **Computation:** `ageSeconds = (Date.now() - parseTimestamp(r.ts)) / 1000` where `parseTimestamp` = `new Date(r.ts.replace(' ', 'T'))` — parses backend `YYYY-MM-DD HH:MM:SS` as local time, timezone-safe. `new Date(r.ts)` alone misinterprets in some browsers; `+Z` would incorrectly force UTC.
+- **Module vars:** `lastAgeSeconds`, `lastReadingTime`
+- **UI when age>30s:**
+  - Red pulsing pill `⚠ STALE` appears near status
+  - Status becomes `label • STALE` red
+  - Banner becomes `⚠ STALE DATA — last reading Xs ago — original advice` red
+  - Age text amber at 30s, red after 60s (`age-warn`, `age-stale` classes)
+- **Recovery:** Does not disable auto-refresh — recovers automatically within 5s when new data arrives
+- **Test:** Stop ESP32 / DEMO=0 → warning at ~30s, restart → clears within 5s
+
+### Simulated-Data Flag (Tasks 1 & 3 - Essential, Demo Honesty)
+- **Backend Task1:**
+  - `/api/latest` returns `{"sim": bool(r.simulated), "reading": {"simulated":0/1, ...}}`
+  - `/api/readings` each row `{"simulated":0/1, "sim":bool}`
+  - `DEMO=1` → sim:true, real serial `DEMO=0` → sim:false, imported CSV → simulated=0 real
+- **Dashboard Task3:**
+  - Purple pill `🧪 SIMULATED` in header when `L.sim===true`
+  - Banner tint: prefixed `🧪 SIMULATED — ...` + dashed purple border (preserves fault color)
+  - Historical notes: "Includes SIMULATED demo history" when sim:true
+  - Transition demo→real hides badge on next 5s refresh
+- **Why:** Prevents fake demo data looking real during viva
+- **Test:** DEMO=1 badge visible, real data hidden
+
+### HTTP Error Handling (Task 4 - Recommended)
+- `get()` now checks `res.ok` and throws on non-2xx (fetch only rejects on network errors, 500 does not)
+- All `refresh*` wrapped in try/catch, `console.warn`, `showBannerError()`, return without clearing last-known values
+- `#errBanner`: `⚠ Backend unreachable — retrying...` hidden by default
+- **Debounce (recommended refinement):** Only shows after 2 consecutive failures to avoid flicker on transient blip; clears after 1 success
+- **Test:** Stop main.py → banner within 10s (2 failures), restart → hides within 5s, no console errors spamming
+
+### Connection Status Indicator (Task 5 - Recommended, Depends on Task 4)
+Distinct from stale-data (Task2): Task2 = backend up but data old, Task5 = backend unreachable/slow.
+- **Tracking:** Module vars `consecutiveFailures`, `lastFetchLatencyMs` in `get()` — success resets failures, failure increments, latency saved both paths
+- **UI `refreshConnStatus()`:**
+  - **Online (green dot):** 0 failures, latency <2s, pill `#166534`, dot `#22c55e`
+  - **Slow (amber):** 1 failure OR latency >2s, pill `#92400e`, dot `#f59e0b`, text `Slow (2.3s)`
+  - **Offline (red):** 2+ failures, pill `#7f1d1d`, dot `#ef4444`
+- **Location:** Header leftmost pill with dot, visually distinct from `#status` fault label
+- **Test:** Backend up fast → Online, add `time.sleep(3)` in /api/latest (don't commit) → Slow, stop backend → Offline within 10s
+
+### Last Updated Age Indicator (Task 6 - Recommended, Depends on Task 2)
+- `<span id="age">` in header, `· 5s ago` format
+- `lastReadingTime = new Date(r.ts.replace(' ', 'T'))` set in refreshLive()
+- `setInterval(updateAgeUI, 1000)` — UI clock ticks every second even during 5s refreshLive interval (correct)
+- Formatting: <60s `Xs ago`, <3600s `Xm Ys ago`, <24h `Xh Ym ago`, else `Xd ago`; class fresh/warn/stale for color
+- Task2 reuses same age computation — refactor computes once
+- **Test:** Live → ticks smoothly 0s,1s,2s..., Stop → climbs to 30s amber, 1m red, Resume → resets 0s
+
+### Health Percentage Wording (Task 7 - Recommended)
+- **Before:** "Performance vs. the first week of data" ambiguous (95% of capacity? vs initial?)
+- **After:** "Recent 7-day performance compared to the first 7 days (100% = no change)" with `?` tooltip: "Performance ratio = measured power / expected power from light. Compares recent 7 days vs first 7 days. Limitations: weather variation, dust, no ground-truth labels, short-term noise."
+- **Aging:** "Performance ratio trend: +0.5% per month (negative = gradually declining)" vs old "Trend: ..."
+- **Edge:** <8 days still "Needs at least 8 days of data."
+
+### Safer DOM Insertion (Task 8 - Recommended)
+- **Before:** `$('alerts').innerHTML = a.map(x => \`<tr><td><b style=...>...\` ).join('')` — safe today (labels fixed, advice hardcoded) but fragile if source changes, XSS vector
+- **After:** Safe construction:
+  ```js
+  tbody.textContent = '';
+  for (const x of a) {
+    const tr = document.createElement('tr');
+    const tdLabel = document.createElement('td');
+    const b = document.createElement('b');
+    b.style.color = COLORS[x.label];
+    b.textContent = nice(x.label); // textContent not innerHTML
+    tdLabel.appendChild(b);
+    ...
+  }
+  ```
+- Visually identical, no innerHTML in alerts path
+- **XSS test:** Insert fake alert with label `<script>alert(1)</script>` into solar.db → dashboard shows literal text, not executed → delete row after
+
+### Optional Tasks
+- **Task 9 - Distinct short_circuit color:** Currently same red as open_circuit, could use different shade for fault visibility
+- **Task 10 - Larger text:** Optional accessibility
 
 ## Fault Detection
 Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
@@ -234,6 +328,9 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 | E BOD: Brownout detector was triggered, rst:0x3 | Supply capacity (500mA peak > USB limit) | See Brownout section: 11dBm + cap + powered hub + USB-A to C cable |
 | # WARNING: No # FIRMWARE_VERSION line seen | Run <30s or firmware not updated | Wait >30s, flash solar_serial.ino v1 |
 | Chart not loading / blank dashboard | CDN version or chart file missing | Use local chart.umd.min.js, check static folder |
+| Backend unreachable banner | main.py stopped | Restart backend, check SERIAL_PORT |
+| STALE warning | ESP32 unplugged / DEMO=0 no data | Restart ESP32 or DEMO=1 |
+| SIMULATED badge | DEMO=1 | Set DEMO=0 SERIAL_PORT=/dev/ttyUSB0 for real data |
 
 ## Limitations
 - Only one PC program can read COM port at a time
@@ -241,14 +338,13 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 - --rows counts GOOD rows only
 - Monthly monitoring needs real historical data (CSV importer) or 60+ days live, DEMO simulated otherwise
 - Brownout mitigation not full fix without powered hub + caps
-- Chart.js vendored 129KB current file is jsDelivr wrapper - ideally 201KB official cdnjs build (functional same, but byte-not-identical)
+- Chart.js vendored - current file should be official 201KB cdnjs build for byte-identical verification (Task 0 ensures this)
 
 ## Future Work / TODO
-- Stage C: live dashboard with # filtering + model.joblib (DONE)
+- Stage C: live dashboard with # filtering + model.joblib (DONE - Tasks 0-11)
 - Stage D: train.py (DONE - model.joblib + calib.json)
 - Hardware fix verification: buy caps (1000µF/16V x2, 470µF/16V x2, 0.1µF x5) + USB-A to C 3A data cable + powered hub, test ThingSpeak age guard live (Test 9 UNBLOCK)
 - Stage A-G review of solar_thingspeak.ino for Requirement C (pending hardware fix)
-- Replace chart.umd.min.js with official 201KB build for byte-identical verification (optional, current works)
 - 12-Test Table final run after hardware fix
 
 ## Security Notes (Updated)
@@ -256,6 +352,36 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 - Keys rotated after chat exposure, Git history verified clean via `git log --all --full-history -- **/.env **/secrets.h` - never in GitHub
 - For reproducible project: `pip install -r requirements.txt` (includes python-dotenv)
 - No secrets in README, logs, or code - all via env
+
+## Recommended Task Order (Summary)
+| Order | Task | Priority | Time |
+|-------|------|----------|------|
+| 0 | Vendor Chart.js | Setup | 5 min |
+| 1 | Backend: sim in /api/latest and /api/readings | Essential | 5 min |
+| 2 | Stale-data warning (30 s) | Essential | 10 min |
+| 3 | Simulated-data flag | Essential | 5 min |
+| 4 | HTTP error handling | Recommended | 10 min |
+| 5 | Connection status indicator | Recommended | 10 min |
+| 6 | Last updated age indicator | Recommended | 8 min |
+| 7 | Health wording | Recommended | 4 min |
+| 8 | Safer DOM insertion | Recommended | 10 min |
+| 9 | Distinct short_circuit color | Optional | 1 min |
+| 10 | Larger text | Optional | 5 min |
+| 11 | README update | Recommended | 5 min |
+| Total ~75 min | | | |
+
+Cross-file: Task1 re-opens main.py — only non-dashboard change, small and focused, commit separately.
+
+## Requirements Addressed
+| Requirement | How these tasks help |
+|-------------|----------------------|
+| A. Wi-Fi | Not this file, solar_thingspeak.ino |
+| B. Bluetooth | Not this file |
+| C. Cloud | sim flag distinguishes cloud/imported/live sources, ThingSpeak field mapping field1..6 |
+| D. TinyML | Not this file, train.py |
+| E. Monthly monitoring | Monthly tab shows change_pct (from main.py), CSV importer enables real history, sim flag distinguishes |
+| F. Fault detection | Task9 improves visibility, Task8 improves alert safety, ground_truth tracking |
+| G. Dashboard | All tasks: honesty (sim, stale), reliability (error handling, offline Chart.js), clarity (wording), accessibility (larger text), connection status, age indicator |
 
 ## Changelog - All Updates Till Now
 - **Priority 1 Security:** Added .gitignore, .env.example, secrets.h.example, rotated ThingSpeak keys, verified history clean
@@ -265,6 +391,15 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 - **Issue 3 - C-C cable brownout + uploader:** Created solar_serial.ino (~80mA) + solar_thingspeak.ino (~500mA) with mitigations (11dBm, 10s delay, HTTP delays)
 - **Issue 4 - sim flag monthly:** Documented as protection, not bug
 - **Issue 5 - CSV not in DB:** Added import_csv_if_exists() in main.py startup (7 locations search, <10 real rows guard, idempotent entry=csv-{ts}-{label} UNIQUE) + tools/import_csv.py standalone
-- **Dashboard Offline:** Vendored chart.umd.min.js v4.4.1 locally, index.html uses local file, no CDN, offline viva ready
+- **Dashboard Offline (Task0):** Vendored chart.umd.min.js v4.4.1 locally, index.html uses local file, no CDN, offline viva ready
+- **Task1 - sim flag:** main.py /api/latest top-level sim:bool(simulated) + reading.simulated, /api/readings each row simulated + sim alias, dashboard honesty
+- **Task2 - Stale warning:** 30s threshold, parseTimestamp with replace(' ','T') local safe, lastAgeSeconds, STALE pill + banner, 1s interval
+- **Task3 - SIMULATED badge:** purple pill when L.sim true, banner tint, historical notes
+- **Task4 - Error handling:** get() checks res.ok, try/catch all refresh*, errBanner after 2 failures debounce, preserves last values
+- **Task5 - Connection status:** Online green / Slow amber (>2s or 1 failure) / Offline red (2+ failures), dot + text, distinct from stale
+- **Task6 - Age indicator:** lastReadingTime, updateAgeUI 1s tick, formats s/m/h/d, color fresh/warn/stale
+- **Task7 - Health wording:** "Recent 7-day vs first 7 days (100% = no change)" + tooltip, trend wording clarified
+- **Task8 - Safer DOM:** createElement + textContent not innerHTML in alerts, XSS safe
+- **Task11 - README:** Documented all features, third-party assets, refresh intervals, stale/sim/connection/age
 - **Tests 1-12:** 11 PASS, 1 BLOCKED (Test 9 age guard needs live ThingSpeak data after hardware fix)
-- **index.html restored:** Recreated with power chart, daily chart, latest, alerts, 5s refresh
+- **index.html restored:** Recreated with power chart, daily chart, latest, alerts, 5s refresh + all Tasks 2-11
