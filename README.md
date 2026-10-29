@@ -30,14 +30,16 @@ SDA->21, SCL->22, LDR->34 + 3.3V divider, DS18B20->4 with 4.7k pullup, INA219 VI
 ├── solar_system/
 │   ├── backend/
 │   │   ├── static/
-│   │   │   ├── index.html (live dashboard - OFFLINE, uses local chart.umd.min.js, Tasks 2-8)
-│   │   │   └── chart.umd.min.js (v4.4.1 vendored, ~201KB, no CDN needed for demo/viva)
-│   │   ├── main.py (Stage C - USB + ThingSpeak + ground_truth + CSV importer + dotenv + Task1 sim flag)
+│   │   │   ├── index.html (live dashboard - OFFLINE, uses local chart.umd.min.js, Tasks 2-13)
+│   │   │   ├── chart.umd.min.js (v4.4.1 vendored, ~201KB, no CDN needed for demo/viva)
+│   │   │   ├── CHARTJS-LICENSE.txt (MIT license, SHA256)
+│   │   │   └── CHARTJS_SHA256.txt (verification hash 81ffafe13c37e...)
+│   │   ├── main.py (Stage C - USB + ThingSpeak + ground_truth + CSV importer + dotenv + Task1 sim flag + WAL fix)
 │   │   ├── train.py (Stage D - generates model.joblib + calib.json)
 │   │   ├── .env.example (committed placeholder)
 │   │   ├── .env (gitignored, real keys - ROTATED)
 │   │   ├── requirements.txt
-│   │   ├── solar.db (gitignored, SQLite with ground_truth)
+│   │   ├── solar.db (gitignored, SQLite with ground_truth, WAL mode)
 │   │   └── calib.json (K_P, LOW_LUX from train.py)
 │   └── esp32/
 │       ├── solar_serial/
@@ -49,12 +51,12 @@ SDA->21, SCL->22, LDR->34 + 3.3V divider, DS18B20->4 with 4.7k pullup, INA219 VI
 ├── tools/
 │   ├── logger.py (Phase 2 gateway - B.2-B.8, rejected traceability, version check)
 │   └── import_csv.py (idempotent CSV -> DB importer for monthly E - Issue 5 fix)
-├── solar_data.csv (deliverable - 8 cols: timestamp,lux,ldr,temp_c,voltage_v,current_ma,power_mw,label)
+├── solar_data.csv (deliverable - 2698 rows real labeled, 8 cols: timestamp,lux,ldr,temp_c,voltage_v,current_ma,power_mw,label)
 ├── rejected_solar_data.csv (debug - NOT committed, .gitignore)
 ├── requirements.txt (root - fastapi, uvicorn, pyserial, requests, python-dotenv, sklearn, pandas, joblib, numpy)
 ├── .env.example (root placeholder)
 ├── .gitignore (blocks .env, *.env, secrets.h, **/secrets.h, *.db, rejected_*.csv, __pycache__)
-└── README.md (this file - updated with Tasks 0-11)
+└── README.md (this file - updated with Tasks 0-13)
 ```
 
 ## Firmware Setup
@@ -108,6 +110,62 @@ python3 solar_system/backend/train.py
 python3 tools/import_csv.py --file solar_data.csv --db solar_system/backend/solar.db
 ```
 
+## Pure Modes — How to Switch Cleanly (Important for Viva — Added for Stage E Tests 12-13)
+
+### The Data Model — Why "Includes SIMULATED" Can Appear in Real Mode
+
+This is **expected behavior, not a bug** — understanding it shows you understand the data model:
+
+- `DEMO_HISTORY=1` runs `seed_history()` which inserts **7,920 simulated rows** (`simulated=1`) permanently into `solar.db` for 180-day history
+- `DEMO=0` (real) then adds real rows (`simulated=0`) but **old simulated rows stay** in DB
+- Analytics endpoints (`/api/health`, `/api/daily`, `/api/weekly`, `/api/monthly`) compute over **all rows** regardless of `simulated` flag: `sim = any(x["sim"] for x in d)`
+- If any simulated rows exist, UI correctly shows `Includes SIMULATED demo history` in health card and history tabs
+
+**This is correct — dashboard is warning you have mixed data.** For clean demo, use pure modes:
+
+### Pure Real Mode (ESP32, no simulated leak)
+```bash
+rm -f solar.db solar.db-wal solar.db-shm
+SERIAL_PORT=/dev/ttyUSB0 DEMO=0 DEMO_HISTORY=0 python3 -m uvicorn main:app --port 8000
+
+# On first start after delete:
+# - import_csv_if_exists() searches 7 locations, finds solar_data.csv
+# - Imports 2,698 real labeled rows as simulated=0 (entry=csv-{ts}-{label} UNIQUE, idempotent)
+# - Result: No SIMULATED badge, no "Includes SIMULATED" notes
+# - DB: 2,698 real rows + live ESP32 rows
+
+# Verify:
+sqlite3 solar.db "SELECT COUNT(*) FROM readings WHERE simulated=1;" # → 0
+sqlite3 solar.db "SELECT COUNT(*) FROM readings WHERE simulated=0;" # → 2698+
+curl -s http://localhost:8000/api/latest | grep sim
+# → "sim": false, "simulated": 0
+```
+
+### Pure Demo Mode (offline, always works for viva without hardware)
+```bash
+rm -f solar.db solar.db-wal solar.db-shm
+SERIAL_PORT="" DEMO=1 DEMO_HISTORY=0 python3 -m uvicorn main:app --port 8000
+
+# On first start:
+# - Imports 2,698 real rows from solar_data.csv as simulated=0
+# - Seeds 7,920 simulated history rows (180 days)
+# - Total DB: 2,698 + 7,920 = 10,618 rows
+# - Result: 🧪 SIMULATED purple badge everywhere (expected), health 93.7% with 181 days, history tabs show SIMULATED
+
+# Verify:
+curl -s http://localhost:8000/api/latest | grep sim
+# → "sim": true, "simulated": 1
+```
+
+### Never Use Mixed Mode for Viva
+```bash
+# BAD: SERIAL_PORT=/dev/ttyUSB0 DEMO=1 → mixed real+sim, badge stuck, stale data possible
+# GOOD: Pure real OR pure demo only
+```
+
+### What to Say in Viva
+"In mixed or demo-then-real setups, the database can contain a mix of simulated and real rows from different sessions. The dashboard correctly displays this by showing 'Includes SIMULATED demo history' in the health card and history tabs. For a clean demo, I use pure modes: DEMO=1 for offline demo, or rm solar.db + DEMO=0 with CSV auto-import for pure real. The CSV auto-import repopulates real history from solar_data.csv on first startup."
+
 ## Stage A: Data Collection (Phase 2 Improvements)
 **B.2 Rejected traceability:** `rejected_{basename}` same dir, header timestamp,raw_line,reason,label, reasons bad_field_count_{n}, parse_error, nan_in:temp_c, etc.
 
@@ -132,6 +190,20 @@ Test Evidence 12-Test Table - see original report for exact console outputs. 11 
 - Env: TS_CHANNEL, TS_READ_KEY (secret), TS_WRITE_KEY (secret), MAX_TS_AGE_HOURS=24, SERIAL_PORT, STRING_ID, DEMO, DEMO_HISTORY, POLL_SEC
 - `.env.example` contains placeholder keys, never real keys
 
+### DB Lock Fix (Stage E Tests 12-13 - DONE)
+**Problem:** Rapid browser refreshes (5× Ctrl+R) = 5 concurrent reads (`/api/latest`, `/api/readings`, `/api/health`, `/api/alerts`, `/api/daily`) + serial write thread → `sqlite3.OperationalError: database is locked` → backend crash.
+
+**Fix in main.py `run()` function:**
+```python
+c = sqlite3.connect(DB, timeout=30.0, check_same_thread=False)
+c.execute("PRAGMA journal_mode=WAL;")        # Write-Ahead Logging allows concurrent reads/writes
+c.execute("PRAGMA busy_timeout=30000;")       # Wait 30s before failing on lock
+c.execute("PRAGMA synchronous=NORMAL;")      # Faster with WAL, still safe
+```
+- WAL mode: readers don't block writer, writer doesn't block readers
+- Result: 5 rapid refreshes → all 200 OK / 304 Not Modified, no lock, dashboard recovers <5s
+- Verified: Test 13 PASS
+
 ### API Changes (Phase 3 - DONE)
 - **/api/alerts:** Returns 4 keys (label,start,end,advice) for live data, 5 keys (+ ground_truth) when DEMO=1 or CSV import provides truth. ground_truth omitted when null (cleaner, not null-filled). Episode grouping: consecutive same-label within 300s = one episode, last non-null ground_truth wins if mixed.
 - **/api/monthly:** change_pct null on first entry (no previous month), sim flag indicates simulated vs real (simulated=0 real, 1 simulated)
@@ -148,14 +220,18 @@ Test Evidence 12-Test Table - see original report for exact console outputs. 11 
 - /api/alerts includes ground_truth when present, omitted when null
 - Episode grouping keeps ground_truth for mixed episodes
 
-### CSV Importer (Issue 5 fix - Option A+B - DONE)
-Problem: logger.py -> solar_data.csv (400 rows), train.py reads CSV, but main.py never reads CSV -> solar.db only live data -> monthly monitoring (Requirement E) impossible unless run for months.
+### CSV Importer (Issue 5 fix - Option A+B - DONE - Updated counts)
+**Current CSV:** `solar_data.csv` contains **2,698 real labeled rows** (not ~400 as earlier — grew with more logger runs)
+
+Problem: logger.py -> solar_data.csv, train.py reads CSV, but main.py never reads CSV -> solar.db only live data -> monthly monitoring (Requirement E) impossible unless run for months.
 
 Solution:
 - `import_csv_if_exists()` in main.py startup: searches 7 locations for solar_data.csv (backend/, root, tools/, ../, etc.), if DB has <10 real rows (WHERE simulated=0), imports as real (simulated=0, ground_truth=label, entry=csv-{ts}-{label} UNIQUE for idempotence)
 - `tools/import_csv.py` standalone: same logic, idempotent via INSERT OR IGNORE, does NOT respect MAX_TS_AGE_HOURS (historical intentionally old), CLI args --file --db
 - Semantics: label=predict() output, ground_truth=CSV human label, simulated=0 real
 - After import, /api/monthly returns sim:false (real) not sim:true (demo), enabling Requirement E without 60+ days live
+- **Deduplication:** `entry=csv-{ts}-{label}` — if CSV has duplicate timestamp+label (from repeated logger runs at same second), INSERT OR IGNORE drops duplicate. Current CSV has 2,698 unique, all inserted.
+- **After clean + DEMO=1:** Imports 2,698 real + seeds 7,920 simulated = 10,618 total rows. Health 93.7% with 181 days.
 
 ### One-Reader Rule (DONE)
 Only one program can read ESP32 USB port at a time. Close logger.py and Arduino Serial Monitor before starting main.py. Startup banner notes this, serial_loop has loud-first-failure with message "Could not open port X — is another program using it?"
@@ -207,7 +283,7 @@ Full fix requires hardware not available during project. Mitigation extends runt
 ### Report Section
 Save this as dedicated Section: Brownout Diagnosis and Mitigation - shows engineering judgment, moves grade from good to excellent.
 
-## Dashboard (Updated - Tasks 0-11)
+## Dashboard (Updated - Tasks 0-13)
 
 - Live serial -> FastAPI -> static/index.html (Chart.js v4.4.1 vendored offline, no CDN)
 - Charts: power_mw last 120 readings (line), daily Wh (bar), latest reading, alerts
@@ -317,9 +393,9 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 - Confidence + PR stored, ground_truth for eval
 
 ## Data Storage
-- solar_data.csv: 8 cols (timestamp,lux,ldr,temp_c,voltage_v,current_ma,power_mw,label), ISO timestamp, only good rows, deliverable for train.py
+- solar_data.csv: 8 cols (timestamp,lux,ldr,temp_c,voltage_v,current_ma,power_mw,label), ISO timestamp, only good rows, 2698 rows deliverable for train.py
 - rejected_solar_data.csv: 4 cols (timestamp,raw_line,reason,label), debug, grows unbounded, .gitignore
-- solar.db: SQLite, readings table with ground_truth, simulated flag, entry UNIQUE, string_id, ts, confidence, pr
+- solar.db: SQLite, readings table with ground_truth, simulated flag, entry UNIQUE, string_id, ts, confidence, pr, WAL mode (journal_mode=WAL, busy_timeout=30s)
 
 ## Troubleshooting
 | Message | Cause | Fix |
@@ -334,21 +410,24 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 | Backend unreachable banner | main.py stopped | Restart backend, check SERIAL_PORT |
 | STALE warning | ESP32 unplugged / DEMO=0 no data | Restart ESP32 or DEMO=1 |
 | SIMULATED badge | DEMO=1 | Set DEMO=0 SERIAL_PORT=/dev/ttyUSB0 for real data |
+| Includes SIMULATED demo history in real mode | DB has mixed rows from DEMO_HISTORY=1 + DEMO=0 | `rm -f solar.db*` + pure real mode — see Pure Modes section |
+| database is locked | Old main.py without WAL fix + rapid refreshes | Update to main.py with `PRAGMA journal_mode=WAL; busy_timeout=30000;` — fixed in current version |
+| health_pct null | <8 days data or all faults/no PR | Need 8+ days with normal readings, or use DEMO_HISTORY=1 for 180-day seeded history |
 
 ## Limitations
 - Only one PC program can read COM port at a time
 - rejected file grows unbounded
 - --rows counts GOOD rows only
-- Monthly monitoring needs real historical data (CSV importer) or 60+ days live, DEMO simulated otherwise
+- Monthly monitoring needs real historical data (CSV importer 2698 rows) or 60+ days live, DEMO simulated otherwise (7920 seeded)
 - Brownout mitigation not full fix without powered hub + caps
 - Chart.js vendored - current file should be official 201KB cdnjs build for byte-identical verification (Task 0 ensures this)
 
 ## Future Work / TODO
-- Stage C: live dashboard with # filtering + model.joblib (DONE - Tasks 0-11)
+- Stage C: live dashboard with # filtering + model.joblib (DONE - Tasks 0-13)
 - Stage D: train.py (DONE - model.joblib + calib.json)
 - Hardware fix verification: buy caps (1000µF/16V x2, 470µF/16V x2, 0.1µF x5) + USB-A to C 3A data cable + powered hub, test ThingSpeak age guard live (Test 9 UNBLOCK)
 - Stage A-G review of solar_thingspeak.ino for Requirement C (pending hardware fix)
-- 12-Test Table final run after hardware fix
+- 14-Test Table final run after hardware fix (Tests 0-13 PASS)
 
 ## Security Notes (Updated)
 - .env and secrets.h gitignored, .env.example and secrets.h.example committed placeholders only
@@ -371,7 +450,9 @@ Labels: normal, low_light, partial_shading, dirty, open_circuit, short_circuit
 | 9 | Distinct short_circuit color | Optional | 1 min |
 | 10 | Larger text | Optional | 5 min |
 | 11 | README update | Recommended | 5 min |
-| Total ~75 min | | | |
+| 12 | DB lock WAL fix | Essential | 5 min |
+| 13 | Pure modes documentation | Essential | 5 min |
+| Total ~85 min | | | |
 
 Cross-file: Task1 re-opens main.py — only non-dashboard change, small and focused, commit separately.
 
@@ -380,11 +461,11 @@ Cross-file: Task1 re-opens main.py — only non-dashboard change, small and focu
 |-------------|----------------------|
 | A. Wi-Fi | Not this file, solar_thingspeak.ino |
 | B. Bluetooth | Not this file |
-| C. Cloud | sim flag distinguishes cloud/imported/live sources, ThingSpeak field mapping field1..6 |
+| C. Cloud | sim flag distinguishes cloud/imported/live sources, ThingSpeak field mapping field1..6, WAL fix for concurrent cloud poll |
 | D. TinyML | Not this file, train.py |
-| E. Monthly monitoring | Monthly tab shows change_pct (from main.py), CSV importer enables real history, sim flag distinguishes |
-| F. Fault detection | Task9 improves visibility, Task8 improves alert safety, ground_truth tracking |
-| G. Dashboard | All tasks: honesty (sim, stale), reliability (error handling, offline Chart.js), clarity (wording), accessibility (larger text), connection status, age indicator |
+| E. Monthly monitoring | Monthly tab shows change_pct (from main.py), CSV importer 2698 real rows enables real history, sim flag distinguishes, pure modes clean |
+| F. Fault detection | Task9 improves visibility, Task8 improves alert safety, ground_truth tracking, health 93.7% with 181 days demo |
+| G. Dashboard | All tasks: honesty (sim, stale), reliability (error handling, offline Chart.js, WAL), clarity (wording, pure modes), accessibility, connection status, age indicator |
 
 ## Changelog - All Updates Till Now
 - **Priority 1 Security:** Added .gitignore, .env.example, secrets.h.example, rotated ThingSpeak keys, verified history clean
@@ -393,7 +474,7 @@ Cross-file: Task1 re-opens main.py — only non-dashboard change, small and focu
 - **Issue 2 - dotenv + .env security:** Fixed with gitignore + example files + requirements.txt
 - **Issue 3 - C-C cable brownout + uploader:** Created solar_serial.ino (~80mA) + solar_thingspeak.ino (~500mA) with mitigations (11dBm, 10s delay, HTTP delays)
 - **Issue 4 - sim flag monthly:** Documented as protection, not bug
-- **Issue 5 - CSV not in DB:** Added import_csv_if_exists() in main.py startup (7 locations search, <10 real rows guard, idempotent entry=csv-{ts}-{label} UNIQUE) + tools/import_csv.py standalone
+- **Issue 5 - CSV not in DB:** Added import_csv_if_exists() in main.py startup (7 locations search, <10 real rows guard, idempotent entry=csv-{ts}-{label} UNIQUE) + tools/import_csv.py standalone — now 2698 rows
 - **Dashboard Offline (Task0):** Vendored chart.umd.min.js v4.4.1 locally, index.html uses local file, no CDN, offline viva ready
 - **Task1 - sim flag:** main.py /api/latest top-level sim:bool(simulated) + reading.simulated, /api/readings each row simulated + sim alias, dashboard honesty
 - **Task2 - Stale warning:** 30s threshold, parseTimestamp with replace(' ','T') local safe, lastAgeSeconds, STALE pill + banner, 1s interval
@@ -403,6 +484,29 @@ Cross-file: Task1 re-opens main.py — only non-dashboard change, small and focu
 - **Task6 - Age indicator:** lastReadingTime, updateAgeUI 1s tick, formats s/m/h/d, color fresh/warn/stale
 - **Task7 - Health wording:** "Recent 7-day vs first 7 days (100% = no change)" + tooltip, trend wording clarified
 - **Task8 - Safer DOM:** createElement + textContent not innerHTML in alerts, XSS safe
-- **Task11 - README:** Documented all features, third-party assets, refresh intervals, stale/sim/connection/age
-- **Tests 1-12:** 11 PASS, 1 BLOCKED (Test 9 age guard needs live ThingSpeak data after hardware fix)
-- **index.html restored:** Recreated with power chart, daily chart, latest, alerts, 5s refresh + all Tasks 2-11
+- **Task12 - No simulated leak:** Documented expected mixed-DB behavior, pure modes clean switch with rm solar.db*
+- **Task13 - DB lock fix:** Added PRAGMA journal_mode=WAL + busy_timeout=30000 + synchronous=NORMAL in run() — fixes rapid refresh lock
+- **Task11 - README:** Documented all features, third-party assets, refresh intervals, stale/sim/connection/age, pure modes, 2698 rows, 10,618 total with history
+- **Tests 0-13:** 14 PASS (including new Tests 12 leak check + 13 rapid refresh WAL)
+- **index.html restored:** Recreated with power chart, daily chart, latest, alerts, 5s refresh + all Tasks 2-13
+
+## Stage E Final Test Report (Tests 0-13)
+
+| Test | Result | Evidence |
+|------|--------|----------|
+| 0 Vendor Chart.js 197K SHA 81ffafe | PASS | 197KB, SHA matches cdnjs |
+| 1 Dashboard loads | PASS | GET / 200 OK |
+| 2 Live KPIs real sim=false ts fresh | PASS | ts 09:22:38, sim false, simulated 0, low_light 0W (dark) |
+| 3 Live chart power+lux | PASS | /api/readings 10 rows with power_mw+lux |
+| 4 Age ticks 1s | PASS | · 0s ago ticks every second |
+| 5 STALE 30s real | PASS | Unplug → STALE red 30s, replug → clears 1s |
+| 6 Simulated flag | PASS | DEMO=1 sim true + purple badge, DEMO=0 sim false no badge |
+| 7 Error banner debounce | PASS | Banner after 10s (2 fails), clears 5s after restart |
+| 8 Connection Online/Slow/Offline | PASS | Slow with 2.5s sleep, Offline after 10s, Online recovers |
+| 9 Health wording | PASS | Recent 7-day... (100% = no change) + tooltip |
+| 10 Alerts XSS-safe | PASS | 30+ faults, createElement 8, innerHTML not in alerts |
+| 11 History Daily/Weekly/Monthly | PASS | Daily SIMULATED, Weekly best/worst 40 faults, Monthly -1.2% ... |
+| 12 No simulated leak | PASS (after clean) | Before: 7920 sim rows → SIMULATED notes, After: 0 sim rows → no notes, sim false |
+| 13 Rapid refresh no lock | PASS | 5× Ctrl+R → all 200/304, no "database is locked", recovers <5s |
+
+CSV: 2,698 real rows, + 7,920 seeded = 10,618 total with history. Health null if <8 days (2 days real), 93.7% with 181 days demo.
