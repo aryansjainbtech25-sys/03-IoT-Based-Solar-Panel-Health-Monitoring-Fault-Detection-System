@@ -94,9 +94,13 @@ lock = threading.Lock()
 
 def run(sql, args=(), one=False, many=None):
     with lock:
-        c = sqlite3.connect(DB)
+        # WAL + busy timeout prevents "database is locked" under concurrent writes (serial + API + seed_history)
+        c = sqlite3.connect(DB, timeout=30.0, check_same_thread=False)
         c.row_factory = sqlite3.Row
         try:
+            c.execute("PRAGMA journal_mode=WAL;")
+            c.execute("PRAGMA busy_timeout=30000;")
+            c.execute("PRAGMA synchronous=NORMAL;")
             if many is not None:
                 c.executemany(sql, many)
                 c.commit()
