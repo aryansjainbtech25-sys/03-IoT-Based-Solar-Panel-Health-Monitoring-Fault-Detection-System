@@ -1,7 +1,40 @@
-# Chart.js 4.4.1 verification
-# File: solar_system/backend/static/chart.umd.min.js
+# Chart.js v4.4.1 verification with full provenance
+# Committed file: solar_system/backend/static/chart.umd.min.js
+# File: chart.umd.min.js
+# Size: 201755 bytes (197 KB) - 201K human readable
+# Verification date: 2026-10-28
+# Verified by: Aryan S Jain (1RUA25CSE0087)
+
+# === Primary: Committed minified file (cdnjs) ===
 # Source: https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js
+# Method: Downloaded twice, SHA identical across downloads (proves static file, not dynamic)
+# Result: STABLE - both downloads identical
+81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f  cdnjs-a.min.js
+81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f  cdnjs-b.min.js
 81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f  chart.umd.min.js
-# Size: 197KB (201755 bytes)
-# Date verified: 2026-10-28
-# Dashboard test: liveChart + histChart render, no console errors
+
+# === Independent Source 1: Unminified from cdnjs vs npm registry ===
+# cdnjs unminified: https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js (201K)
+# npm registry: https://registry.npmjs.org/chart.js/-/chart.js-4.4.1.tgz -> package/dist/chart.umd.js
+# Method: curl + tar -xzf + sha256sum
+# Result: MATCH - proves source is official v4.4.1 tag, not custom
+74401d738dd3e03ee5dfb3b6841210fe2c4ead8a960c4011ca4ba0b78a9fd8f3  cdnjs-umd.js (201K unminified)
+74401d738dd3e03ee5dfb3b6841210fe2c4ead8a960c4011ca4ba0b78a9fd8f3  npm-umd.js (201K unminified)
+
+# === Note on minified file provenance ===
+# Chart.js v4.4.1 npm package does NOT contain chart.umd.min.js (only chart.umd.js)
+# GitHub release https://github.com/chartjs/Chart.js/releases/tag/v4.4.1 does not provide zip with minified dist
+# Therefore minified file cannot be byte-for-byte compared to GitHub/npm
+# cdnjs minified is auto-generated from official v4.4.1 source via CDN pipeline
+# This is EXPECTED and standard for Chart.js v4 - minified builds are CDN artifacts
+# Unminified source verification above proves origin is official tag
+
+# === Dashboard test ===
+# DEMO=1 python -m uvicorn main:app --reload --port 8000
+# http://localhost:8000 -> liveChart (dual Y) + histChart (bar+line, spanGaps) render, no console errors
+# Test: PASS
+
+# === How to re-verify ===
+# cd solar_system/backend/static
+# curl -fsSL https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js | sha256sum
+# Should print: 81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f

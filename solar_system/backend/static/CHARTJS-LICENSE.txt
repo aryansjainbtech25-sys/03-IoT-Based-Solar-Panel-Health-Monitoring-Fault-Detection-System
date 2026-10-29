@@ -36,3 +36,16 @@ Verified on: 2026-10-28 by Aryan S Jain (1RUA25CSE0087)
 Reason for vendoring: Offline viva/demo reliability, removes CDN dependency, removes external attack surface, reproducible build
 
 This file is byte-for-byte the official release from cdnjs. No modifications.
+
+---
+
+Provenance verification (2026-10-28):
+- Committed file SHA256: 81ffafe13c37e1b25793b020d446f4d9739b949dadb7f9f79d709a0cad781c2f (201,755 bytes)
+- Stability: Downloaded twice from cdnjs, hashes identical (proves static)
+- Source: Unminified chart.umd.js from cdnjs (201K) matches npm registry package/dist/chart.umd.js
+  SHA256: 74401d738dd3e03ee5dfb3b6841210fe2c4ead8a960c4011ca4ba0b78a9fd8f3
+- Note: Chart.js v4.4.1 does not publish official minified file in GitHub release or npm
+  Minified file is CDN-generated from official source - expected behavior
+- Dashboard test: liveChart + histChart render correctly
+
+For re-verification: curl -fsSL https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js | sha256sum
